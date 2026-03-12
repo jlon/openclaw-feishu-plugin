@@ -928,6 +928,11 @@ export function buildFeishuAgentBody(params: {
       `\n\n[System: This group message is co-addressed to multiple people or bots. ` +
       `Reply only for yourself. Do not delegate, do not call sessions_send or sessions_spawn, ` +
       `and do not answer on behalf of anyone else.]`;
+  } else if (ctx.groupCoAddressMode === "peer_collab") {
+    messageBody +=
+      `\n\n[System: This group message is a peer collaboration request among multiple bots. ` +
+      `Reply only from your own role, give your own judgment or next action, keep it concise, ` +
+      `do not answer on behalf of other bots, and do not expose tool calls or internal routing in visible text.]`;
   } else if (ctx.groupCoAddressMode === "coordinate") {
     messageBody +=
       `\n\n[System: This group message is a coordination request. You are the coordinator for this turn. ` +

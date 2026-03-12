@@ -16,7 +16,7 @@ export type MentionTarget = {
   key: string; // Placeholder in original message, e.g. @_user_1
 };
 
-export type GroupCoAddressMode = "none" | "direct_reply" | "coordinate";
+export type GroupCoAddressMode = "none" | "direct_reply" | "peer_collab" | "coordinate";
 
 const GROUP_COORDINATION_PATTERNS = [
   /安排/u,
@@ -27,11 +27,23 @@ const GROUP_COORDINATION_PATTERNS = [
   /拉通/u,
   /并行/u,
   /负责/u,
-  /协作/u,
-  /处理/u,
-  /排查/u,
   /跟进/u,
-  /让.+(看|查|处理|排查|汇报|回复)/u,
+  /总结/u,
+  /统筹/u,
+  /让.+(安排|协调|汇总|总结|统筹|跟进)/u,
+];
+
+const GROUP_PEER_COLLAB_PATTERNS = [
+  /协作/u,
+  /联动/u,
+  /配合/u,
+  /一起(看|查|排查|分析|讨论|确认|处理)/u,
+  /一块(看|查|排查|分析|讨论|确认|处理)/u,
+  /共同(看|查|排查|分析|讨论|确认|处理)/u,
+  /讨论下/u,
+  /先各自/u,
+  /分别(看|查|判断|说|回复|给)/u,
+  /互相(讨论|补充|确认|配合|对齐|核对)/u,
 ];
 
 function extractEventText(event: FeishuMessageEvent): string {
@@ -58,6 +70,14 @@ export function isGroupCoordinationRequest(event: FeishuMessageEvent): boolean {
   return GROUP_COORDINATION_PATTERNS.some((pattern) => pattern.test(text));
 }
 
+export function isGroupPeerCollaborationRequest(event: FeishuMessageEvent): boolean {
+  if (event.message.chat_type !== "group") {
+    return false;
+  }
+  const text = extractEventText(event);
+  return GROUP_PEER_COLLAB_PATTERNS.some((pattern) => pattern.test(text));
+}
+
 export function classifyGroupCoAddressMode(params: {
   event: FeishuMessageEvent;
   mentionedBotCount: number;
@@ -67,10 +87,13 @@ export function classifyGroupCoAddressMode(params: {
   if (event.message.chat_type !== "group" || mentionedBotCount < 2) {
     return "none";
   }
-  if (!mainMentioned) {
-    return "direct_reply";
+  if (mainMentioned && isGroupCoordinationRequest(event)) {
+    return "coordinate";
   }
-  return isGroupCoordinationRequest(event) ? "coordinate" : "direct_reply";
+  if (isGroupPeerCollaborationRequest(event)) {
+    return "peer_collab";
+  }
+  return "direct_reply";
 }
 
 function extractMentionTargetsFromContent(

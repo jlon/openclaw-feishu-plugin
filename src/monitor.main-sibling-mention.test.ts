@@ -155,6 +155,27 @@ describe("shouldSkipDispatchForMentionPolicy", () => {
     ).toBe(true);
   });
 
+  it("does not skip child dispatch when main and the child are mentioned in a peer collaboration request", () => {
+    setFeishuBotOpenIdForTesting("main", "ou_main");
+    setFeishuBotOpenIdForTesting("flink-sre", "ou_flink");
+
+    expect(
+      shouldSkipDispatchForMentionPolicy({
+        accountId: "flink-sre",
+        currentBotOpenId: "ou_flink",
+        event: makeGroupEvent({
+          mentions: [
+            { openId: "ou_main", name: "首席大管家", key: "@_user_1" },
+            { openId: "ou_flink", name: "Flink-SRE", key: "@_user_2" },
+          ],
+          content: JSON.stringify({
+            text: "@首席大管家 @Flink-SRE 你们先一起看下这条链路",
+          }),
+        }),
+      }),
+    ).toBe(false);
+  });
+
   it("does not skip main when it is co-mentioned for a direct reply", () => {
     setFeishuBotOpenIdForTesting("main", "ou_main");
     setFeishuBotOpenIdForTesting("flink-sre", "ou_flink");
@@ -191,6 +212,27 @@ describe("shouldSkipDispatchForMentionPolicy", () => {
           ],
           content: JSON.stringify({
             text: "@首席大管家 @Flink-SRE 帮我安排并汇总这次排查",
+          }),
+        }),
+      }),
+    ).toBe(false);
+  });
+
+  it("does not skip main when it is co-mentioned for a peer collaboration request", () => {
+    setFeishuBotOpenIdForTesting("main", "ou_main");
+    setFeishuBotOpenIdForTesting("flink-sre", "ou_flink");
+
+    expect(
+      shouldSkipDispatchForMentionPolicy({
+        accountId: "main",
+        currentBotOpenId: "ou_main",
+        event: makeGroupEvent({
+          mentions: [
+            { openId: "ou_main", name: "首席大管家", key: "@_user_1" },
+            { openId: "ou_flink", name: "Flink-SRE", key: "@_user_2" },
+          ],
+          content: JSON.stringify({
+            text: "@首席大管家 @Flink-SRE 你们先一起看下这条链路",
           }),
         }),
       }),
