@@ -1,4 +1,4 @@
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
@@ -20,6 +20,7 @@ type Args = {
   mentions: string[];
   deliverAccounts: string[];
   dryRun: boolean;
+  dumpDispatchPath?: string;
 };
 
 const parseArgs = (argv: string[]): Args => {
@@ -39,6 +40,7 @@ const parseArgs = (argv: string[]): Args => {
     mentions: [],
     deliverAccounts: [],
     dryRun: false,
+    dumpDispatchPath: process.env.OPENCLAW_FEISHU_E2E_DUMP_DISPATCH,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -49,6 +51,7 @@ const parseArgs = (argv: string[]): Args => {
     else if (arg === "--text") parsed.text = nextValue(i++, arg);
     else if (arg === "--mentions") parsed.mentions = nextValue(i++, arg).split(",").map((v) => v.trim()).filter(Boolean);
     else if (arg === "--deliver-accounts") parsed.deliverAccounts = nextValue(i++, arg).split(",").map((v) => v.trim()).filter(Boolean);
+    else if (arg === "--dump-dispatch") parsed.dumpDispatchPath = nextValue(i++, arg);
     else if (arg === "--dry-run") parsed.dryRun = true;
     else throw new Error(`unknown arg: ${arg}`);
   }
@@ -107,7 +110,46 @@ const main = async () => {
   const cfg = prepareSyntheticHarnessConfig(await loadConfig(args.configPath));
   const createPluginRuntime = await loadCreatePluginRuntime();
   process.env.OPENCLAW_FEISHU_SYNTHETIC_NO_REPLY_TO = "1";
-  setFeishuRuntime(createPluginRuntime() as never);
+  const pluginRuntime = createPluginRuntime() as never;
+  if (args.dumpDispatchPath) {
+    const replyRuntime = (pluginRuntime as {
+      channel?: {
+        reply?: {
+          dispatchReplyFromConfig?: (args: {
+            ctx: Record<string, unknown>;
+          }) => Promise<unknown>;
+        };
+      };
+    }).channel?.reply;
+    const originalDispatch = replyRuntime?.dispatchReplyFromConfig;
+    if (replyRuntime && originalDispatch) {
+      replyRuntime.dispatchReplyFromConfig = async (dispatchArgs) => {
+        await writeFile(
+          args.dumpDispatchPath!,
+          JSON.stringify(
+            {
+              body: dispatchArgs.ctx.Body,
+              bodyForAgent: dispatchArgs.ctx.BodyForAgent,
+              rawBody: dispatchArgs.ctx.RawBody,
+              from: dispatchArgs.ctx.From,
+              to: dispatchArgs.ctx.To,
+              senderName: dispatchArgs.ctx.SenderName,
+              senderId: dispatchArgs.ctx.SenderId,
+              wasMentioned: dispatchArgs.ctx.WasMentioned,
+              collaborationMode: dispatchArgs.ctx.CollaborationMode,
+              collaborationPhase: dispatchArgs.ctx.CollaborationPhase,
+              collaborationParticipants: dispatchArgs.ctx.CollaborationParticipants,
+              commandAuthorized: dispatchArgs.ctx.CommandAuthorized,
+            },
+            null,
+            2,
+          ),
+        );
+        return originalDispatch(dispatchArgs);
+      };
+    }
+  }
+  setFeishuRuntime(pluginRuntime);
   const runtime = buildRuntimeEnv();
   const deliverAccounts =
     args.deliverAccounts.length > 0
@@ -199,7 +241,11 @@ const main = async () => {
   console.log(`[e2e] completed ${messageId}`);
 };
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.stack || error.message : String(error));
-  process.exit(1);
-});
+main()
+  .then(() => {
+    process.exit(0);
+  })
+  .catch((error) => {
+    console.error(error instanceof Error ? error.stack || error.message : String(error));
+    process.exit(1);
+  });
