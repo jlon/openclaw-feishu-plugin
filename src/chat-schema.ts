@@ -1,13 +1,13 @@
 import { Type, type Static } from "@sinclair/typebox";
 
-const CHAT_ACTION_VALUES = ["members", "info"] as const;
+const CHAT_ACTION_VALUES = ["members", "info", "participants"] as const;
 const MEMBER_ID_TYPE_VALUES = ["open_id", "user_id", "union_id"] as const;
 
 export const FeishuChatSchema = Type.Object({
   action: Type.Unsafe<(typeof CHAT_ACTION_VALUES)[number]>({
     type: "string",
     enum: [...CHAT_ACTION_VALUES],
-    description: "Action to run: members | info",
+    description: "Action to run: members | info | participants",
   }),
   chat_id: Type.String({ description: "Chat ID (from URL or event payload)" }),
   page_size: Type.Optional(Type.Number({ description: "Page size (1-100, default 50)" })),

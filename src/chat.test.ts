@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerFeishuChatTools } from "./chat.js";
+import { botNames, botOpenIds } from "./monitor.state.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 
@@ -13,6 +14,8 @@ describe("registerFeishuChatTools", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    botOpenIds.clear();
+    botNames.clear();
     createFeishuClientMock.mockReturnValue({
       im: {
         chat: { get: chatGetMock },
@@ -72,6 +75,91 @@ describe("registerFeishuChatTools", () => {
       expect.objectContaining({
         chat_id: "oc_1",
         members: [expect.objectContaining({ member_id: "ou_1", name: "member1" })],
+      }),
+    );
+  });
+
+  it("returns participant summary with visible human members and eligible internal bots", async () => {
+    botOpenIds.set("main", "ou_main_bot");
+    botOpenIds.set("flink-sre", "ou_flink_bot");
+    botNames.set("main", "首席大管家");
+    botNames.set("flink-sre", "Flink-SRE");
+
+    const registerTool = vi.fn();
+    registerFeishuChatTools({
+      config: {
+        channels: {
+          feishu: {
+            enabled: true,
+            defaultAccount: "main",
+            accounts: {
+              main: {
+                enabled: true,
+                appId: "app_main",
+                appSecret: "sec_main",
+                groupPolicy: "allowlist",
+                groupAllowFrom: ["oc_1"],
+              },
+              "flink-sre": {
+                enabled: true,
+                appId: "app_flink",
+                appSecret: "sec_flink",
+                groupPolicy: "allowlist",
+                groupAllowFrom: ["oc_1"],
+              },
+              coder: {
+                enabled: true,
+                appId: "app_coder",
+                appSecret: "sec_coder",
+                groupPolicy: "disabled",
+              },
+            },
+          },
+        },
+      } as any,
+      logger: { debug: vi.fn(), info: vi.fn() } as any,
+      registerTool,
+    } as any);
+
+    const tool = registerTool.mock.calls
+      .map((call) => call[0])
+      .map((candidate) => (typeof candidate === "function" ? candidate({ agentAccountId: "main" }) : candidate))
+      .find((candidate) => candidate.name === "feishu_chat");
+    expect(tool).toBeDefined();
+
+    chatGetMock.mockResolvedValueOnce({
+      code: 0,
+      data: { name: "group name", user_count: 1, chat_type: "private" },
+    });
+    chatMembersGetMock.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        has_more: false,
+        page_token: "",
+        items: [{ member_id: "ou_1", name: "member1", member_id_type: "open_id" }],
+      },
+    });
+
+    const result = await tool.execute("tc_3", { action: "participants", chat_id: "oc_1" });
+    expect(result.details).toEqual(
+      expect.objectContaining({
+        chat_id: "oc_1",
+        visible_member_count: 1,
+        visible_members: [expect.objectContaining({ member_id: "ou_1", name: "member1" })],
+        internal_bot_count: 2,
+        internal_bots: [
+          expect.objectContaining({
+            account_id: "flink-sre",
+            bot_open_id: "ou_flink_bot",
+            display_name: "Flink-SRE",
+          }),
+          expect.objectContaining({
+            account_id: "main",
+            bot_open_id: "ou_main_bot",
+            display_name: "首席大管家",
+          }),
+        ],
+        external_bot_count_known: false,
       }),
     );
   });

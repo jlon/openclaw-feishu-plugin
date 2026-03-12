@@ -2,7 +2,9 @@ import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/feishu";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { FeishuChatSchema, type FeishuChatParams } from "./chat-schema.js";
+import { botNames, botOpenIds } from "./monitor.state.js";
 import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
+import type { ResolvedFeishuAccount } from "./types.js";
 
 function json(data: unknown) {
   return {
@@ -70,6 +72,52 @@ async function getChatMembers(
   };
 }
 
+function normalizeChatId(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function canAccountParticipateInGroup(account: ResolvedFeishuAccount, chatId: string) {
+  const groupPolicy = account.config.groupPolicy ?? "allowlist";
+  if (groupPolicy === "disabled") {
+    return false;
+  }
+  if (groupPolicy === "open" || groupPolicy === "allowall") {
+    return true;
+  }
+  const groupAllowFrom = (account.config.groupAllowFrom ?? []).map((entry) =>
+    normalizeChatId(String(entry)),
+  );
+  return groupAllowFrom.includes(normalizeChatId(chatId));
+}
+
+async function getChatParticipants(
+  client: Lark.Client,
+  chatId: string,
+  accounts: ResolvedFeishuAccount[],
+) {
+  const [info, members] = await Promise.all([getChatInfo(client, chatId), getChatMembers(client, chatId)]);
+  const internalBots = accounts
+    .filter((account) => canAccountParticipateInGroup(account, chatId))
+    .map((account) => ({
+      account_id: account.accountId,
+      display_name: botNames.get(account.accountId) ?? account.name ?? account.accountId,
+      bot_open_id: botOpenIds.get(account.accountId) ?? null,
+    }))
+    .toSorted((a, b) => a.account_id.localeCompare(b.account_id));
+
+  return {
+    chat_id: chatId,
+    chat_name: info.name,
+    chat_type: info.chat_type,
+    visible_member_count: members.members.length,
+    visible_members: members.members,
+    internal_bot_count: internalBots.length,
+    internal_bots: internalBots,
+    external_bot_count_known: false,
+    note: "visible_members comes from Feishu member APIs; internal_bots reflects OpenClaw Feishu accounts eligible for this chat.",
+  };
+}
+
 export function registerFeishuChatTools(api: OpenClawPluginApi) {
   if (!api.config) {
     api.logger.debug?.("feishu_chat: No config available, skipping chat tools");
@@ -117,6 +165,8 @@ export function registerFeishuChatTools(api: OpenClawPluginApi) {
                 );
               case "info":
                 return json(await getChatInfo(client, p.chat_id));
+              case "participants":
+                return json(await getChatParticipants(client, p.chat_id, accounts));
               default:
                 return json({ error: `Unknown action: ${String(p.action)}` });
             }
