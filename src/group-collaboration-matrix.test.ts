@@ -262,6 +262,7 @@ describe("group collaboration matrix", () => {
           phase: "initial_assessment",
           participants: ["flink-sre", "starrocks-sre"],
           isCurrentOwner: false,
+          allowedActions: ["collab_assess"],
         },
       },
       botOpenId: "ou_flink",
@@ -275,7 +276,46 @@ describe("group collaboration matrix", () => {
     expect(body).toContain('"action":"collab_assess"');
   });
 
-  it("12. DM mention-forward still works", () => {
+  it("12. awaiting-accept body tells target how to respond to handoff", () => {
+    const body = buildFeishuAgentBody({
+      ctx: {
+        content: "user: @Flink-SRE @Starrocks-SRE 继续协作",
+        senderName: "user",
+        senderOpenId: "ou_sender",
+        messageId: "msg_2",
+        hasAnyMention: true,
+        groupCoAddressMode: "peer_collab",
+        collaboration: {
+          taskId: "task_y",
+          mode: "peer_collab",
+          phase: "awaiting_accept",
+          participants: ["flink-sre", "starrocks-sre"],
+          currentOwner: "flink-sre",
+          speakerToken: "starrocks-sre",
+          isCurrentOwner: false,
+          activeHandoff: {
+            handoffId: "handoff_1",
+            fromAgentId: "flink-sre",
+            targetAgentId: "starrocks-sre",
+            status: "awaiting_accept",
+            timeWindow: "18:20-18:35",
+            currentFinding: "sink 吞吐下降",
+            unresolvedQuestion: "查询层是否是独立源头",
+            evidencePaths: ["shared/tasks/task_y/evidence/02-compute.md"],
+          },
+          allowedActions: ["agent_handoff_accept", "agent_handoff_reject", "agent_handoff_need_info"],
+        },
+      },
+      botOpenId: "ou_starrocks",
+      autoMentionTargets: false,
+      agentId: "starrocks-sre",
+    });
+    expect(body).toContain("AllowedActions=agent_handoff_accept,agent_handoff_reject,agent_handoff_need_info");
+    expect(body).toContain("is handing this task to you");
+    expect(body).toContain("handoffId handoff_1");
+  });
+
+  it("13. DM mention-forward still works", () => {
     const event = makeEvent({
       chatType: "p2p",
       text: '<at user_id="ou_flink">Flink-SRE</at> 帮我转达一句',

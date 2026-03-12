@@ -3,8 +3,20 @@ import type { FeishuMessageEvent } from "./bot.js";
 import type { GroupCoAddressMode } from "./mention.js";
 
 export type CollaborationMode = Extract<GroupCoAddressMode, "peer_collab" | "coordinate">;
-export type CollaborationPhase = "initial_assessment" | "active_collab";
+export type CollaborationPhase =
+  | "initial_assessment"
+  | "active_collab"
+  | "awaiting_accept"
+  | "blocked_need_info"
+  | "completed";
 export type CollaborationOwnershipClaim = "owner_candidate" | "supporting" | "observer";
+export type CollaborationAllowedAction =
+  | "collab_assess"
+  | "agent_handoff"
+  | "agent_handoff_accept"
+  | "agent_handoff_reject"
+  | "agent_handoff_need_info"
+  | "agent_handoff_complete";
 
 export type CollaborationAssessAction = {
   action: "collab_assess";
@@ -16,9 +28,49 @@ export type CollaborationAssessAction = {
   needsWorker?: boolean;
 };
 
-export type CollaborationControlAction = CollaborationAssessAction;
+export type CollaborationHandoffAction = {
+  action: "agent_handoff";
+  taskId: string;
+  handoffId: string;
+  fromAgentId: string;
+  targetAgentId: string;
+  timeWindow: string;
+  currentFinding: string;
+  unresolvedQuestion: string;
+  evidencePaths: string[];
+};
+
+export type CollaborationHandoffResponseAction = {
+  action: "agent_handoff_accept" | "agent_handoff_reject" | "agent_handoff_need_info";
+  taskId: string;
+  handoffId: string;
+  agentId: string;
+};
+
+export type CollaborationCompleteAction = {
+  action: "agent_handoff_complete";
+  taskId: string;
+  agentId: string;
+};
+
+export type CollaborationControlAction =
+  | CollaborationAssessAction
+  | CollaborationHandoffAction
+  | CollaborationHandoffResponseAction
+  | CollaborationCompleteAction;
 
 export type CollaborationAssessment = Omit<CollaborationAssessAction, "action" | "taskId">;
+
+export type CollaborationActiveHandoffState = {
+  handoffId: string;
+  fromAgentId: string;
+  targetAgentId: string;
+  status: "awaiting_accept" | "blocked_need_info";
+  timeWindow: string;
+  currentFinding: string;
+  unresolvedQuestion: string;
+  evidencePaths: string[];
+};
 
 export type CollaborationState = {
   stateKey: string;
@@ -29,6 +81,7 @@ export type CollaborationState = {
   currentOwner?: string;
   speakerToken?: string;
   assessments: Record<string, CollaborationAssessment>;
+  activeHandoffState?: CollaborationActiveHandoffState;
 };
 
 export type CollaborationRuntimeContext = {
@@ -39,6 +92,8 @@ export type CollaborationRuntimeContext = {
   currentOwner?: string;
   speakerToken?: string;
   isCurrentOwner: boolean;
+  activeHandoff?: CollaborationActiveHandoffState;
+  allowedActions: CollaborationAllowedAction[];
 };
 
 const collaborationStateByKey = new Map<string, CollaborationState>();
@@ -100,6 +155,12 @@ function maybeAdvanceState(state: CollaborationState): CollaborationState {
   collaborationStateByKey.set(state.stateKey, nextState);
   collaborationStateByTaskId.set(state.taskId, nextState);
   return nextState;
+}
+
+function replaceState(state: CollaborationState): CollaborationState {
+  collaborationStateByKey.set(state.stateKey, state);
+  collaborationStateByTaskId.set(state.taskId, state);
+  return state;
 }
 
 function normalizeParticipants(participants: string[]): string[] {
@@ -171,6 +232,88 @@ function toAssessAction(value: unknown): CollaborationAssessAction | null {
   };
 }
 
+function toHandoffAction(value: unknown): CollaborationHandoffAction | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const action = value as Record<string, unknown>;
+  if (action.action !== "agent_handoff") {
+    return null;
+  }
+  if (
+    typeof action.taskId !== "string" ||
+    typeof action.handoffId !== "string" ||
+    typeof action.fromAgentId !== "string" ||
+    typeof action.targetAgentId !== "string" ||
+    typeof action.timeWindow !== "string" ||
+    typeof action.currentFinding !== "string" ||
+    typeof action.unresolvedQuestion !== "string" ||
+    !Array.isArray(action.evidencePaths)
+  ) {
+    return null;
+  }
+  const evidencePaths = action.evidencePaths.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+  if (evidencePaths.length === 0) {
+    return null;
+  }
+  return {
+    action: "agent_handoff",
+    taskId: action.taskId,
+    handoffId: action.handoffId,
+    fromAgentId: action.fromAgentId,
+    targetAgentId: action.targetAgentId,
+    timeWindow: action.timeWindow,
+    currentFinding: action.currentFinding,
+    unresolvedQuestion: action.unresolvedQuestion,
+    evidencePaths,
+  };
+}
+
+function toHandoffResponseAction(value: unknown): CollaborationHandoffResponseAction | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const action = value as Record<string, unknown>;
+  if (
+    action.action !== "agent_handoff_accept" &&
+    action.action !== "agent_handoff_reject" &&
+    action.action !== "agent_handoff_need_info"
+  ) {
+    return null;
+  }
+  if (
+    typeof action.taskId !== "string" ||
+    typeof action.handoffId !== "string" ||
+    typeof action.agentId !== "string"
+  ) {
+    return null;
+  }
+  return {
+    action: action.action,
+    taskId: action.taskId,
+    handoffId: action.handoffId,
+    agentId: action.agentId,
+  };
+}
+
+function toCompleteAction(value: unknown): CollaborationCompleteAction | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const action = value as Record<string, unknown>;
+  if (action.action !== "agent_handoff_complete") {
+    return null;
+  }
+  if (typeof action.taskId !== "string" || typeof action.agentId !== "string") {
+    return null;
+  }
+  return {
+    action: "agent_handoff_complete",
+    taskId: action.taskId,
+    agentId: action.agentId,
+  };
+}
+
 export function parseCollaborationControlBlocks(text: string): {
   visibleText: string;
   actions: CollaborationControlAction[];
@@ -180,7 +323,11 @@ export function parseCollaborationControlBlocks(text: string): {
     .replace(CONTROL_BLOCK_PATTERN, (_, rawPayload: string) => {
       try {
         const parsed = JSON.parse(rawPayload.trim()) as unknown;
-        const action = toAssessAction(parsed);
+        const action =
+          toAssessAction(parsed) ??
+          toHandoffAction(parsed) ??
+          toHandoffResponseAction(parsed) ??
+          toCompleteAction(parsed);
         if (action) {
           actions.push(action);
         }
@@ -202,25 +349,126 @@ export function applyCollaborationActions(actions: CollaborationControlAction[])
     if (!state) {
       continue;
     }
-    if (!state.participants.includes(action.agentId)) {
+    if (action.action === "collab_assess" && !state.participants.includes(action.agentId)) {
       continue;
     }
-    const nextState: CollaborationState = {
-      ...state,
-      assessments: {
-        ...state.assessments,
-        [action.agentId]: {
-          agentId: action.agentId,
-          ownershipClaim: action.ownershipClaim,
-          currentFinding: action.currentFinding,
-          nextCheck: action.nextCheck,
-          needsWorker: action.needsWorker,
+    if (action.action === "collab_assess") {
+      const nextState: CollaborationState = {
+        ...state,
+        assessments: {
+          ...state.assessments,
+          [action.agentId]: {
+            agentId: action.agentId,
+            ownershipClaim: action.ownershipClaim,
+            currentFinding: action.currentFinding,
+            nextCheck: action.nextCheck,
+            needsWorker: action.needsWorker,
+          },
         },
-      },
-    };
-    collaborationStateByKey.set(nextState.stateKey, nextState);
-    collaborationStateByTaskId.set(nextState.taskId, nextState);
-    touchedStates.push(maybeAdvanceState(nextState));
+      };
+      touchedStates.push(maybeAdvanceState(replaceState(nextState)));
+      continue;
+    }
+    if (action.action === "agent_handoff") {
+      if (
+        state.currentOwner !== action.fromAgentId ||
+        !state.participants.includes(action.targetAgentId) ||
+        state.phase !== "active_collab"
+      ) {
+        continue;
+      }
+      touchedStates.push(
+        replaceState({
+          ...state,
+          phase: "awaiting_accept",
+          speakerToken: action.targetAgentId,
+          activeHandoffState: {
+            handoffId: action.handoffId,
+            fromAgentId: action.fromAgentId,
+            targetAgentId: action.targetAgentId,
+            status: "awaiting_accept",
+            timeWindow: action.timeWindow,
+            currentFinding: action.currentFinding,
+            unresolvedQuestion: action.unresolvedQuestion,
+            evidencePaths: action.evidencePaths,
+          },
+        }),
+      );
+      continue;
+    }
+    if (action.action === "agent_handoff_accept") {
+      if (
+        state.phase !== "awaiting_accept" ||
+        state.activeHandoffState?.handoffId !== action.handoffId ||
+        state.activeHandoffState.targetAgentId !== action.agentId
+      ) {
+        continue;
+      }
+      touchedStates.push(
+        replaceState({
+          ...state,
+          phase: "active_collab",
+          currentOwner: action.agentId,
+          speakerToken: action.agentId,
+          activeHandoffState: undefined,
+        }),
+      );
+      continue;
+    }
+    if (action.action === "agent_handoff_reject") {
+      if (
+        state.phase !== "awaiting_accept" ||
+        state.activeHandoffState?.handoffId !== action.handoffId ||
+        state.activeHandoffState.targetAgentId !== action.agentId
+      ) {
+        continue;
+      }
+      touchedStates.push(
+        replaceState({
+          ...state,
+          phase: "active_collab",
+          currentOwner: state.activeHandoffState.fromAgentId,
+          speakerToken: state.activeHandoffState.fromAgentId,
+          activeHandoffState: undefined,
+        }),
+      );
+      continue;
+    }
+    if (action.action === "agent_handoff_need_info") {
+      if (
+        state.phase !== "awaiting_accept" ||
+        state.activeHandoffState?.handoffId !== action.handoffId ||
+        state.activeHandoffState.targetAgentId !== action.agentId
+      ) {
+        continue;
+      }
+      touchedStates.push(
+        replaceState({
+          ...state,
+          phase: "blocked_need_info",
+          currentOwner: state.activeHandoffState.fromAgentId,
+          speakerToken: state.activeHandoffState.fromAgentId,
+          activeHandoffState: {
+            ...state.activeHandoffState,
+            status: "blocked_need_info",
+          },
+        }),
+      );
+      continue;
+    }
+    if (action.action === "agent_handoff_complete") {
+      if (!state.currentOwner || state.currentOwner !== action.agentId) {
+        continue;
+      }
+      touchedStates.push(
+        replaceState({
+          ...state,
+          phase: "completed",
+          speakerToken: undefined,
+          activeHandoffState: undefined,
+        }),
+      );
+    }
   }
   return touchedStates;
 }
@@ -229,6 +477,21 @@ export function buildCollaborationRuntimeContext(params: {
   state: CollaborationState;
   agentId: string;
 }): CollaborationRuntimeContext {
+  const isCurrentOwner = params.state.currentOwner === params.agentId;
+  const activeHandoff = params.state.activeHandoffState;
+  const allowedActions: CollaborationAllowedAction[] = [];
+  if (params.state.mode === "peer_collab" && params.state.phase === "initial_assessment") {
+    allowedActions.push("collab_assess");
+  } else if (params.state.phase === "active_collab" && isCurrentOwner) {
+    allowedActions.push("agent_handoff", "agent_handoff_complete");
+  } else if (
+    params.state.phase === "awaiting_accept" &&
+    activeHandoff?.targetAgentId === params.agentId
+  ) {
+    allowedActions.push("agent_handoff_accept", "agent_handoff_reject", "agent_handoff_need_info");
+  } else if (params.state.phase === "blocked_need_info" && isCurrentOwner) {
+    allowedActions.push("agent_handoff", "agent_handoff_complete");
+  }
   return {
     taskId: params.state.taskId,
     mode: params.state.mode,
@@ -236,7 +499,9 @@ export function buildCollaborationRuntimeContext(params: {
     participants: params.state.participants,
     currentOwner: params.state.currentOwner,
     speakerToken: params.state.speakerToken,
-    isCurrentOwner: params.state.currentOwner === params.agentId,
+    isCurrentOwner,
+    activeHandoff,
+    allowedActions,
   };
 }
 

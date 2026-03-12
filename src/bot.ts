@@ -987,6 +987,9 @@ export function buildFeishuAgentBody(params: {
     messageBody +=
       `\n\n[System: Collaboration task ${collaboration.taskId}. ` +
       `Mode=${collaboration.mode}. Phase=${collaboration.phase}. Participants=${collaboration.participants.join(", ")}.]`;
+    if (collaboration.allowedActions.length > 0) {
+      messageBody += `\n[System: AllowedActions=${collaboration.allowedActions.join(",")}.]`;
+    }
     if (collaboration.phase === "initial_assessment" && collaboration.mode === "peer_collab" && agentId) {
       messageBody +=
         `\n[System: This is the initial assessment stage. Give one short visible reply from your own role only.]` +
@@ -998,11 +1001,35 @@ export function buildFeishuAgentBody(params: {
     } else if (collaboration.phase === "active_collab") {
       if (collaboration.isCurrentOwner) {
         messageBody +=
-          `\n[System: You are the current owner of this collaboration. Drive the next step and keep others in-role.]`;
+          `\n[System: You are the current owner of this collaboration. Drive the next step and keep others in-role.]` +
+          `\n[System: If you need to pass the lead, append exactly one hidden control block with action agent_handoff.]` +
+          `\n[System: If your current stage is complete, append exactly one hidden control block with action agent_handoff_complete.]`;
       } else if (collaboration.currentOwner) {
         messageBody +=
           `\n[System: Current owner is ${collaboration.currentOwner}. Do not act as the main speaker unless the user re-addresses you.]`;
       }
+    } else if (collaboration.phase === "awaiting_accept" && collaboration.activeHandoff) {
+      const activeHandoff = collaboration.activeHandoff;
+      if (activeHandoff.targetAgentId === agentId) {
+        messageBody +=
+          `\n[System: ${activeHandoff.fromAgentId} is handing this task to you.]` +
+          `\n[System: Known time window: ${activeHandoff.timeWindow}.]` +
+          `\n[System: Current finding: ${activeHandoff.currentFinding}.]` +
+          `\n[System: Unresolved question: ${activeHandoff.unresolvedQuestion}.]` +
+          `\n[System: Reply briefly, then append exactly one hidden control block with action agent_handoff_accept, agent_handoff_reject, or agent_handoff_need_info using handoffId ${activeHandoff.handoffId}.]`;
+      } else if (collaboration.currentOwner) {
+        messageBody +=
+          `\n[System: Handoff ${activeHandoff.handoffId} is pending acceptance by ${activeHandoff.targetAgentId}. Do not create another handoff until it resolves.]`;
+      }
+    } else if (collaboration.phase === "blocked_need_info" && collaboration.activeHandoff) {
+      messageBody +=
+        `\n[System: The current handoff is blocked waiting for more information from ${collaboration.activeHandoff.targetAgentId}.]`;
+      if (collaboration.isCurrentOwner) {
+        messageBody +=
+          `\n[System: You still own this task. Provide the missing context, then either continue yourself or issue a new hidden agent_handoff control block.]`;
+      }
+    } else if (collaboration.phase === "completed") {
+      messageBody += `\n[System: This collaboration stage is completed. Do not reopen it unless the user adds new facts.]`;
     }
   }
 
@@ -1532,6 +1559,14 @@ export async function handleFeishuMessage(params: {
         CollaborationCurrentOwner: collaboration?.currentOwner,
         CollaborationSpeakerToken: collaboration?.speakerToken,
         CollaborationIsCurrentOwner: collaboration?.isCurrentOwner,
+        CollaborationAllowedActions:
+          collaboration && collaboration.allowedActions.length > 0
+            ? collaboration.allowedActions.join(",")
+            : undefined,
+        CollaborationActiveHandoffId: collaboration?.activeHandoff?.handoffId,
+        CollaborationActiveHandoffFrom: collaboration?.activeHandoff?.fromAgentId,
+        CollaborationActiveHandoffTarget: collaboration?.activeHandoff?.targetAgentId,
+        CollaborationActiveHandoffStatus: collaboration?.activeHandoff?.status,
         ...mediaPayload,
       });
     };

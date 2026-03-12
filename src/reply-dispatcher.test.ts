@@ -62,6 +62,7 @@ vi.mock("./streaming-card.js", () => ({
 
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import {
+  applyCollaborationActions,
   clearCollaborationStateForTesting,
   ensureCollaborationState,
   getCollaborationStateForTesting,
@@ -289,6 +290,71 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expect.objectContaining({
         ownershipClaim: "owner_candidate",
         currentFinding: "lag上升",
+      }),
+    );
+  });
+
+  it("strips handoff control blocks from visible replies and updates collaboration owner flow", async () => {
+    const state = ensureCollaborationState({
+      chatId: "oc_chat",
+      messageId: "msg_2",
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre"],
+    });
+    applyCollaborationActions([
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "flink-sre",
+        ownershipClaim: "owner_candidate",
+      },
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "starrocks-sre",
+        ownershipClaim: "supporting",
+      },
+    ]);
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "flink-sre",
+      runtime: {} as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.deliver(
+      {
+        text:
+          "我先把查询层交给 Starrocks-SRE。\n\n```openclaw-collab\n" +
+          JSON.stringify({
+            action: "agent_handoff",
+            taskId: state.taskId,
+            handoffId: "handoff_1",
+            fromAgentId: "flink-sre",
+            targetAgentId: "starrocks-sre",
+            timeWindow: "18:20-18:35",
+            currentFinding: "sink 吞吐下降",
+            unresolvedQuestion: "查询层是否是独立源头",
+            evidencePaths: ["shared/tasks/task_x/evidence/02-compute.md"],
+          }) +
+          "\n```",
+      },
+      { kind: "final" },
+    );
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "我先把查询层交给 Starrocks-SRE。",
+      }),
+    );
+    expect(getCollaborationStateForTesting(state.taskId)).toEqual(
+      expect.objectContaining({
+        phase: "awaiting_accept",
+        activeHandoffState: expect.objectContaining({
+          handoffId: "handoff_1",
+          targetAgentId: "starrocks-sre",
+        }),
       }),
     );
   });
