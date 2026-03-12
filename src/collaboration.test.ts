@@ -316,4 +316,228 @@ describe("collaboration state", () => {
     expect(finalState?.speakerToken).toBeUndefined();
     expect(finalState?.activeHandoffState).toBeUndefined();
   });
+
+  it("allows the current owner to supersede a blocked handoff with a new handoff", () => {
+    const state = ensureCollaborationState({
+      chatId: "oc_group_1",
+      messageId: "msg_10",
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre", "coder"],
+    });
+    applyCollaborationActions([
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "flink-sre",
+        ownershipClaim: "owner_candidate",
+      },
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "starrocks-sre",
+        ownershipClaim: "supporting",
+      },
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "coder",
+        ownershipClaim: "observer",
+      },
+      {
+        action: "agent_handoff",
+        taskId: state.taskId,
+        handoffId: "handoff_blocked_1",
+        fromAgentId: "flink-sre",
+        targetAgentId: "starrocks-sre",
+        timeWindow: "18:20-18:35",
+        currentFinding: "sink 吞吐下降",
+        unresolvedQuestion: "查询层是否是独立源头",
+        evidencePaths: ["shared/tasks/task_x/evidence/02-compute.md"],
+      },
+      {
+        action: "agent_handoff_need_info",
+        taskId: state.taskId,
+        handoffId: "handoff_blocked_1",
+        agentId: "starrocks-sre",
+      },
+      {
+        action: "agent_handoff",
+        taskId: state.taskId,
+        handoffId: "handoff_blocked_2",
+        fromAgentId: "flink-sre",
+        targetAgentId: "coder",
+        timeWindow: "18:20-18:35",
+        currentFinding: "需要补充日志和截图",
+        unresolvedQuestion: "先确认 HDFS 和作业日志是否有错误堆栈",
+        evidencePaths: ["shared/tasks/task_x/evidence/02-compute.md"],
+      },
+    ]);
+    const finalState = getCollaborationStateForTesting(state.taskId);
+    expect(finalState?.phase).toBe("awaiting_accept");
+    expect(finalState?.currentOwner).toBe("flink-sre");
+    expect(finalState?.speakerToken).toBe("coder");
+    expect(finalState?.activeHandoffState).toMatchObject({
+      handoffId: "handoff_blocked_2",
+      fromAgentId: "flink-sre",
+      targetAgentId: "coder",
+      status: "awaiting_accept",
+    });
+  });
+
+  it("lets the source owner cancel or reassign while handoff is awaiting acceptance", () => {
+    const state = ensureCollaborationState({
+      chatId: "oc_group_1",
+      messageId: "msg_10a",
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre"],
+    });
+    applyCollaborationActions([
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "flink-sre",
+        ownershipClaim: "owner_candidate",
+      },
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "starrocks-sre",
+        ownershipClaim: "supporting",
+      },
+      {
+        action: "agent_handoff",
+        taskId: state.taskId,
+        handoffId: "handoff_waiting_1",
+        fromAgentId: "flink-sre",
+        targetAgentId: "starrocks-sre",
+        timeWindow: "18:20-18:35",
+        currentFinding: "sink 吞吐下降",
+        unresolvedQuestion: "查询层是否是独立源头",
+        evidencePaths: ["shared/tasks/task_x/evidence/02-compute.md"],
+      },
+    ]);
+    const waitingState = getCollaborationStateForTesting(state.taskId);
+    const ctx = buildCollaborationRuntimeContext({
+      state: waitingState!,
+      agentId: "flink-sre",
+    });
+    expect(ctx.allowedActions).toEqual(["agent_handoff", "agent_handoff_cancel"]);
+  });
+
+  it("expire returns the task to the current owner and clears the pending handoff", () => {
+    const state = ensureCollaborationState({
+      chatId: "oc_group_1",
+      messageId: "msg_11",
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre"],
+    });
+    applyCollaborationActions([
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "flink-sre",
+        ownershipClaim: "owner_candidate",
+      },
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "starrocks-sre",
+        ownershipClaim: "supporting",
+      },
+      {
+        action: "agent_handoff",
+        taskId: state.taskId,
+        handoffId: "handoff_expire_1",
+        fromAgentId: "flink-sre",
+        targetAgentId: "starrocks-sre",
+        timeWindow: "18:20-18:35",
+        currentFinding: "sink 吞吐下降",
+        unresolvedQuestion: "查询层是否是独立源头",
+        evidencePaths: ["shared/tasks/task_x/evidence/02-compute.md"],
+      },
+      {
+        action: "agent_handoff_expire",
+        taskId: state.taskId,
+        handoffId: "handoff_expire_1",
+        agentId: "flink-sre",
+      } as never,
+    ]);
+    const finalState = getCollaborationStateForTesting(state.taskId);
+    expect(finalState?.phase).toBe("active_collab");
+    expect(finalState?.currentOwner).toBe("flink-sre");
+    expect(finalState?.speakerToken).toBe("flink-sre");
+    expect(finalState?.activeHandoffState).toBeUndefined();
+  });
+
+  it("ignores stale accept after a handoff has been superseded", () => {
+    const state = ensureCollaborationState({
+      chatId: "oc_group_1",
+      messageId: "msg_12",
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre", "coder"],
+    });
+    applyCollaborationActions([
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "flink-sre",
+        ownershipClaim: "owner_candidate",
+      },
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "starrocks-sre",
+        ownershipClaim: "supporting",
+      },
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "coder",
+        ownershipClaim: "observer",
+      },
+      {
+        action: "agent_handoff",
+        taskId: state.taskId,
+        handoffId: "handoff_old",
+        fromAgentId: "flink-sre",
+        targetAgentId: "starrocks-sre",
+        timeWindow: "18:20-18:35",
+        currentFinding: "先看查询层",
+        unresolvedQuestion: "是否为独立源头",
+        evidencePaths: ["shared/tasks/task_x/evidence/02-compute.md"],
+      },
+      {
+        action: "agent_handoff_need_info",
+        taskId: state.taskId,
+        handoffId: "handoff_old",
+        agentId: "starrocks-sre",
+      },
+      {
+        action: "agent_handoff",
+        taskId: state.taskId,
+        handoffId: "handoff_new",
+        fromAgentId: "flink-sre",
+        targetAgentId: "coder",
+        timeWindow: "18:20-18:35",
+        currentFinding: "先补日志和截图",
+        unresolvedQuestion: "作业和 HDFS 是否有错误堆栈",
+        evidencePaths: ["shared/tasks/task_x/evidence/03-resource.md"],
+      },
+      {
+        action: "agent_handoff_accept",
+        taskId: state.taskId,
+        handoffId: "handoff_old",
+        agentId: "starrocks-sre",
+      },
+    ]);
+    const finalState = getCollaborationStateForTesting(state.taskId);
+    expect(finalState?.phase).toBe("awaiting_accept");
+    expect(finalState?.currentOwner).toBe("flink-sre");
+    expect(finalState?.speakerToken).toBe("coder");
+    expect(finalState?.activeHandoffState).toMatchObject({
+      handoffId: "handoff_new",
+      targetAgentId: "coder",
+      status: "awaiting_accept",
+    });
+  });
 });

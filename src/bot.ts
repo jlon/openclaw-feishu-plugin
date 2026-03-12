@@ -1018,6 +1018,10 @@ export function buildFeishuAgentBody(params: {
           `\n[System: Current finding: ${activeHandoff.currentFinding}.]` +
           `\n[System: Unresolved question: ${activeHandoff.unresolvedQuestion}.]` +
           `\n[System: Reply briefly, then append exactly one hidden control block with action agent_handoff_accept, agent_handoff_reject, or agent_handoff_need_info using handoffId ${activeHandoff.handoffId}.]`;
+      } else if (collaboration.isCurrentOwner) {
+        messageBody +=
+          `\n[System: Handoff ${activeHandoff.handoffId} is pending acceptance by ${activeHandoff.targetAgentId}.]` +
+          `\n[System: You still own this task. Wait, cancel the handoff, or issue a replacement agent_handoff only if the target is wrong or no longer appropriate.]`;
       } else if (collaboration.currentOwner) {
         messageBody +=
           `\n[System: Handoff ${activeHandoff.handoffId} is pending acceptance by ${activeHandoff.targetAgentId}. Do not create another handoff until it resolves.]`;

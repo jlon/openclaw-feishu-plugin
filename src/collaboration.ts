@@ -13,10 +13,13 @@ export type CollaborationOwnershipClaim = "owner_candidate" | "supporting" | "ob
 export type CollaborationAllowedAction =
   | "collab_assess"
   | "agent_handoff"
+  | "agent_handoff_cancel"
   | "agent_handoff_accept"
   | "agent_handoff_reject"
   | "agent_handoff_need_info"
-  | "agent_handoff_complete";
+  | "agent_handoff_complete"
+  | "agent_handoff_expire"
+  | "agent_handoff_superseded";
 
 export type CollaborationAssessAction = {
   action: "collab_assess";
@@ -47,6 +50,13 @@ export type CollaborationHandoffResponseAction = {
   agentId: string;
 };
 
+export type CollaborationHandoffResolutionAction = {
+  action: "agent_handoff_cancel" | "agent_handoff_expire" | "agent_handoff_superseded";
+  taskId: string;
+  handoffId: string;
+  agentId: string;
+};
+
 export type CollaborationCompleteAction = {
   action: "agent_handoff_complete";
   taskId: string;
@@ -57,6 +67,7 @@ export type CollaborationControlAction =
   | CollaborationAssessAction
   | CollaborationHandoffAction
   | CollaborationHandoffResponseAction
+  | CollaborationHandoffResolutionAction
   | CollaborationCompleteAction;
 
 export type CollaborationAssessment = Omit<CollaborationAssessAction, "action" | "taskId">;
@@ -296,6 +307,33 @@ function toHandoffResponseAction(value: unknown): CollaborationHandoffResponseAc
   };
 }
 
+function toHandoffResolutionAction(value: unknown): CollaborationHandoffResolutionAction | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const action = value as Record<string, unknown>;
+  if (
+    action.action !== "agent_handoff_cancel" &&
+    action.action !== "agent_handoff_expire" &&
+    action.action !== "agent_handoff_superseded"
+  ) {
+    return null;
+  }
+  if (
+    typeof action.taskId !== "string" ||
+    typeof action.handoffId !== "string" ||
+    typeof action.agentId !== "string"
+  ) {
+    return null;
+  }
+  return {
+    action: action.action,
+    taskId: action.taskId,
+    handoffId: action.handoffId,
+    agentId: action.agentId,
+  };
+}
+
 function toCompleteAction(value: unknown): CollaborationCompleteAction | null {
   if (!value || typeof value !== "object") {
     return null;
@@ -327,6 +365,7 @@ export function parseCollaborationControlBlocks(text: string): {
           toAssessAction(parsed) ??
           toHandoffAction(parsed) ??
           toHandoffResponseAction(parsed) ??
+          toHandoffResolutionAction(parsed) ??
           toCompleteAction(parsed);
         if (action) {
           actions.push(action);
@@ -373,7 +412,12 @@ export function applyCollaborationActions(actions: CollaborationControlAction[])
       if (
         state.currentOwner !== action.fromAgentId ||
         !state.participants.includes(action.targetAgentId) ||
-        state.phase !== "active_collab"
+        (state.phase !== "active_collab" &&
+          state.phase !== "blocked_need_info" &&
+          !(
+            state.phase === "awaiting_accept" &&
+            state.activeHandoffState?.fromAgentId === action.fromAgentId
+          ))
       ) {
         continue;
       }
@@ -392,6 +436,29 @@ export function applyCollaborationActions(actions: CollaborationControlAction[])
             unresolvedQuestion: action.unresolvedQuestion,
             evidencePaths: action.evidencePaths,
           },
+        }),
+      );
+      continue;
+    }
+    if (
+      action.action === "agent_handoff_cancel" ||
+      action.action === "agent_handoff_expire" ||
+      action.action === "agent_handoff_superseded"
+    ) {
+      if (
+        (state.phase !== "awaiting_accept" && state.phase !== "blocked_need_info") ||
+        state.activeHandoffState?.handoffId !== action.handoffId ||
+        state.currentOwner !== action.agentId ||
+        state.activeHandoffState.fromAgentId !== action.agentId
+      ) {
+        continue;
+      }
+      touchedStates.push(
+        replaceState({
+          ...state,
+          phase: "active_collab",
+          speakerToken: state.currentOwner,
+          activeHandoffState: undefined,
         }),
       );
       continue;
@@ -489,8 +556,14 @@ export function buildCollaborationRuntimeContext(params: {
     activeHandoff?.targetAgentId === params.agentId
   ) {
     allowedActions.push("agent_handoff_accept", "agent_handoff_reject", "agent_handoff_need_info");
+  } else if (
+    params.state.phase === "awaiting_accept" &&
+    isCurrentOwner &&
+    activeHandoff?.fromAgentId === params.agentId
+  ) {
+    allowedActions.push("agent_handoff", "agent_handoff_cancel");
   } else if (params.state.phase === "blocked_need_info" && isCurrentOwner) {
-    allowedActions.push("agent_handoff", "agent_handoff_complete");
+    allowedActions.push("agent_handoff", "agent_handoff_cancel", "agent_handoff_complete");
   }
   return {
     taskId: params.state.taskId,
