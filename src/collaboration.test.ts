@@ -78,6 +78,24 @@ describe("collaboration state", () => {
     ]);
   });
 
+  it("parses shorthand handoff control blocks for generic collaboration turns", () => {
+    const parsed = parseCollaborationControlBlocks(
+      `从工程实现看，灵魂还体现在系统的自我坚持。\n\n{"action":"agent_handoff","taskId":"task_x","agentId":"coder","handoffTo":"flink-sre","handoffReason":"请 flink-sre 从实时任务运维角度补充"}`,
+    );
+    expect(parsed.visibleText).toBe("从工程实现看，灵魂还体现在系统的自我坚持。");
+    expect(parsed.actions).toEqual([
+      expect.objectContaining({
+        action: "agent_handoff",
+        taskId: "task_x",
+        fromAgentId: "coder",
+        targetAgentId: "flink-sre",
+        currentFinding: "请 flink-sre 从实时任务运维角度补充",
+        unresolvedQuestion: "请 flink-sre 从实时任务运维角度补充",
+        evidencePaths: [],
+      }),
+    ]);
+  });
+
   it("strips an incomplete trailing collaboration fence from visible text", () => {
     const parsed = parseCollaborationControlBlocks(
       `我先看实时链路。\n\n\`\`\`openclaw-collab\n{"action":"collab_assess","taskId":"task_x","agentId":"flink-sre"`,

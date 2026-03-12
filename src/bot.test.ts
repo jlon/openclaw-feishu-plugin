@@ -4,6 +4,7 @@ import {
   applyCollaborationActions,
   clearCollaborationStateForTesting,
   ensureCollaborationState,
+  getCollaborationStateForTesting,
 } from "./collaboration.js";
 import { botNames, botOpenIds } from "./monitor.state.js";
 import { createPluginRuntimeMock } from "./test-support/plugin-runtime-mock.js";
@@ -146,9 +147,9 @@ describe("buildFeishuAgentBody", () => {
         agentId: "main",
       });
 
-      expect(body).toBe(
-        '[message_id: synthetic_msg_1]\nSender Name: <at user_id="ou-target">@_user_1</at> synthetic test',
-      );
+      expect(body).toContain('[message_id: synthetic_msg_1]\nSender Name: <at user_id="ou-target">@_user_1</at> synthetic test');
+      expect(body).toContain("[System: The content may include mention tags in the form <at user_id=\"...\">name</at>.");
+      expect(body).toContain("[System: This group message is a peer collaboration request among multiple bots.");
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_FEISHU_SYNTHETIC_MINIMAL_BODY;
@@ -566,6 +567,206 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("dispatches handoff accept and next-owner followup after an owner hands off", async () => {
+    mockCreateFeishuReplyDispatcher.mockImplementation((params) => ({
+      dispatcher: {
+        markComplete: vi.fn(),
+        waitForIdle: vi.fn(async () => {}),
+      },
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      _params: params,
+    }));
+    botOpenIds.set("flink-sre", "ou_flink");
+    botOpenIds.set("starrocks-sre", "ou_starrocks");
+    botNames.set("flink-sre", "Flink-SRE");
+    botNames.set("starrocks-sre", "Starrocks-SRE");
+
+    let dispatchCount = 0;
+    mockDispatchReplyFromConfig.mockImplementation(async ({ ctx }: { ctx: Record<string, string> }) => {
+      dispatchCount += 1;
+      if (dispatchCount == 1) {
+        applyCollaborationActions([
+          {
+            action: "collab_assess",
+            taskId: ctx.CollaborationTaskId,
+            agentId: "flink-sre",
+            ownershipClaim: "owner_candidate",
+            currentFinding: "Flink 侧先给观点",
+            nextCheck: "等待 StarRocks-SRE",
+            needsWorker: false,
+          },
+        ]);
+      } else if (dispatchCount == 2) {
+        applyCollaborationActions([
+          {
+            action: "collab_assess",
+            taskId: ctx.CollaborationTaskId,
+            agentId: "starrocks-sre",
+            ownershipClaim: "supporting",
+            currentFinding: "StarRocks 侧补一条观点",
+            nextCheck: "等待 owner 继续",
+            needsWorker: false,
+          },
+        ]);
+      } else if (dispatchCount == 3) {
+        applyCollaborationActions([
+          {
+            action: "agent_handoff",
+            taskId: ctx.CollaborationTaskId,
+            handoffId: "handoff_chain_1",
+            fromAgentId: "flink-sre",
+            targetAgentId: "starrocks-sre",
+            timeWindow: "",
+            currentFinding: "请 StarRocks-SRE 从查询服务角度继续",
+            unresolvedQuestion: "请 StarRocks-SRE 从查询服务角度继续",
+            evidencePaths: [],
+          },
+        ]);
+      } else if (dispatchCount == 4) {
+        const state = getCollaborationStateForTesting(ctx.CollaborationTaskId);
+        const handoffId = state?.activeHandoffState?.handoffId;
+        if (!handoffId) {
+          throw new Error("expected active handoff before accept");
+        }
+        applyCollaborationActions([
+          {
+            action: "agent_handoff_accept",
+            taskId: ctx.CollaborationTaskId,
+            handoffId,
+            agentId: "starrocks-sre",
+          },
+        ]);
+      }
+      return { queuedFinal: false, counts: { final: 1 } };
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          enabled: true,
+          defaultAccount: "main",
+          accounts: {
+            main: {
+              enabled: true,
+              appId: "app_main",
+              appSecret: "secret_main",
+              groupPolicy: "open",
+              requireMention: false,
+              renderMode: "raw",
+              streaming: false,
+            },
+            "flink-sre": {
+              enabled: true,
+              appId: "app_flink",
+              appSecret: "secret_flink",
+              groupPolicy: "open",
+              requireMention: true,
+              renderMode: "raw",
+              streaming: false,
+            },
+            "starrocks-sre": {
+              enabled: true,
+              appId: "app_starrocks",
+              appSecret: "secret_starrocks",
+              groupPolicy: "open",
+              requireMention: true,
+              renderMode: "raw",
+              streaming: false,
+            },
+          },
+        },
+      },
+      agents: {
+        list: [{ id: "main" }, { id: "flink-sre" }, { id: "starrocks-sre" }],
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-user",
+        },
+      },
+      message: {
+        message_id: "msg-peer-handoff-chain",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({
+          text: '<at user_id="ou_flink">Flink-SRE</at> <at user_id="ou_starrocks">Starrocks-SRE</at> 你俩协作讨论这个问题',
+        }),
+        mentions: [
+          { key: "@_user_1", name: "Flink-SRE", id: { open_id: "ou_flink" } },
+          { key: "@_user_2", name: "Starrocks-SRE", id: { open_id: "ou_starrocks" } },
+        ],
+      },
+    };
+
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "flink-sre",
+      channel: "feishu",
+      accountId: "flink-sre",
+      sessionKey: "agent:flink-sre:feishu:group:oc-group",
+      mainSessionKey: "agent:main:main",
+      matchedBy: "explicit",
+    });
+    await handleFeishuMessage({
+      cfg,
+      event,
+      accountId: "flink-sre",
+      botOpenId: "ou_flink",
+      botName: "Flink-SRE",
+      runtime: createRuntimeEnv(),
+    });
+
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "starrocks-sre",
+      channel: "feishu",
+      accountId: "starrocks-sre",
+      sessionKey: "agent:starrocks-sre:feishu:group:oc-group",
+      mainSessionKey: "agent:main:main",
+      matchedBy: "explicit",
+    });
+    await handleFeishuMessage({
+      cfg,
+      event,
+      accountId: "starrocks-sre",
+      botOpenId: "ou_starrocks",
+      botName: "Starrocks-SRE",
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(5);
+    expect(mockDispatchReplyFromConfig).toHaveBeenNthCalledWith(
+      4,
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          AccountId: "starrocks-sre",
+          MessageSid: expect.stringContaining("::handoff::"),
+          CollaborationPhase: "awaiting_accept",
+          CollaborationCurrentOwner: "flink-sre",
+          CollaborationActiveHandoffTarget: "starrocks-sre",
+          CollaborationAllowedActions:
+            "agent_handoff_accept,agent_handoff_reject,agent_handoff_need_info",
+        }),
+      }),
+    );
+    expect(mockDispatchReplyFromConfig).toHaveBeenNthCalledWith(
+      5,
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          AccountId: "starrocks-sre",
+          MessageSid: expect.stringContaining("::owner::"),
+          CollaborationPhase: "active_collab",
+          CollaborationCurrentOwner: "starrocks-sre",
+          CollaborationIsCurrentOwner: true,
+          CollaborationAllowedActions: "agent_handoff,agent_handoff_complete",
+        }),
+      }),
+    );
+  });
+
   it("dispatches an owner kickoff turn after peer collaboration assessments elect an owner", async () => {
     mockCreateFeishuReplyDispatcher.mockImplementation((params) => ({
       dispatcher: {
@@ -714,6 +915,7 @@ describe("handleFeishuMessage command authorization", () => {
       expect.objectContaining({
         ctx: expect.objectContaining({
           AccountId: "flink-sre",
+          MessageSid: expect.stringContaining("::owner::"),
           CollaborationPhase: "active_collab",
           CollaborationCurrentOwner: "flink-sre",
           CollaborationIsCurrentOwner: true,
@@ -752,7 +954,45 @@ describe("handleFeishuMessage command authorization", () => {
 
     expect(body).toContain("You are the current owner of this collaboration.");
     expect(body).toContain("Do not call sessions_send, sessions_spawn, subagents, or message");
-    expect(body).toContain("append exactly one hidden control block with action agent_handoff");
+    expect(body).toContain('"action":"agent_handoff"');
+    expect(body).toContain('"handoffTo":"target-agent-id"');
+    expect(body).toContain('"handoffReason":"一句话说明为什么交给对方"');
+  });
+
+  it("does not offer handoff instructions when the owner has reached max hops", async () => {
+    const body = buildFeishuAgentBody({
+      ctx: {
+        content: "user: @Flink-SRE @Starrocks-SRE 持续下钻后给一句结论",
+        senderName: "user",
+        senderOpenId: "ou_sender",
+        messageId: "msg-owner-max-hop",
+        hasAnyMention: true,
+        groupCoAddressMode: "peer_collab",
+        collaboration: {
+          taskId: "task_owner_limit",
+          mode: "peer_collab",
+          phase: "active_collab",
+          participants: ["flink-sre", "starrocks-sre"],
+          currentOwner: "flink-sre",
+          speakerToken: "flink-sre",
+          handoffCount: 1,
+          maxHops: 1,
+          isCurrentOwner: true,
+          allowedActions: ["agent_handoff_complete"],
+        },
+      },
+      botOpenId: "ou_flink",
+      autoMentionTargets: false,
+      agentId: "flink-sre",
+    });
+
+    expect(body).toContain("You are the current owner of this collaboration.");
+    expect(body).toContain("The handoff limit has been reached for this task.");
+    expect(body).toContain("Finish from your own role and append exactly one hidden control block with action agent_handoff_complete.");
+    expect(body).toContain("Use the findings already gathered in this task to produce the best current conclusion you can from your role.");
+    expect(body).toContain("Do not defer the conclusion back to the user or ask another participant to finish it for you.");
+    expect(body).not.toContain('"action":"agent_handoff"');
+    expect(body).not.toContain('"handoffTo":"target-agent-id"');
   });
 
   it("injects collaboration max hops and handoff count into runtime context", async () => {

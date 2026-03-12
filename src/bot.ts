@@ -968,6 +968,7 @@ export function buildFeishuAgentBody(params: {
 }): string {
   const { ctx, quotedContent, permissionErrorForAgent, botOpenId, agentId } = params;
   const autoMentionTargets = params.autoMentionTargets ?? true;
+  const useSyntheticMinimalBody = shouldUseSyntheticMinimalBody(ctx.messageId);
   let messageBody = ctx.content;
   if (quotedContent) {
     messageBody = `[Replying to: "${quotedContent}"]\n\n${ctx.content}`;
@@ -976,9 +977,8 @@ export function buildFeishuAgentBody(params: {
   // DMs already have per-sender sessions, but this label still improves attribution.
   const speaker = ctx.senderName ?? ctx.senderOpenId;
   messageBody = `${speaker}: ${messageBody}`;
-
-  if (shouldUseSyntheticMinimalBody(ctx.messageId)) {
-    return `[message_id: ${ctx.messageId}]\n${messageBody}`;
+  if (useSyntheticMinimalBody) {
+    messageBody = `[message_id: ${ctx.messageId}]\n${messageBody}`;
   }
 
   if (ctx.hasAnyMention) {
@@ -1044,11 +1044,24 @@ export function buildFeishuAgentBody(params: {
         `\n[System: The hidden control block will be stripped before sending to Feishu.]`;
     } else if (collaboration.phase === "active_collab") {
       if (collaboration.isCurrentOwner) {
+        const canHandoff = collaboration.allowedActions.includes("agent_handoff");
         messageBody +=
           `\n[System: You are the current owner of this collaboration. Drive the next step and keep others in-role.]` +
-          `\n[System: Do not call sessions_send, sessions_spawn, subagents, or message to make another participant speak. Use hidden control blocks only.]` +
-          `\n[System: If you need to pass the lead, append exactly one hidden control block with action agent_handoff.]` +
-          `\n[System: If your current stage is complete, append exactly one hidden control block with action agent_handoff_complete.]`;
+          `\n[System: Do not call sessions_send, sessions_spawn, subagents, or message to make another participant speak. Use hidden control blocks only.]`;
+        if (canHandoff) {
+          messageBody +=
+            `\n[System: If you need to pass the lead, append exactly one hidden control block in this format:` +
+            `\n\`\`\`openclaw-collab` +
+            `\n{"action":"agent_handoff","taskId":"${collaboration.taskId}","agentId":"${agentId}","handoffTo":"target-agent-id","handoffReason":"一句话说明为什么交给对方"}` +
+            `\n\`\`\`` +
+            `\n[System: If your current stage is complete, append exactly one hidden control block with action agent_handoff_complete.]`;
+        } else {
+          messageBody +=
+            `\n[System: The handoff limit has been reached for this task.]` +
+            `\n[System: Use the findings already gathered in this task to produce the best current conclusion you can from your role.]` +
+            `\n[System: Do not defer the conclusion back to the user or ask another participant to finish it for you.]` +
+            `\n[System: Finish from your own role and append exactly one hidden control block with action agent_handoff_complete.]`;
+        }
       } else if (collaboration.currentOwner) {
         messageBody +=
           `\n[System: Current owner is ${collaboration.currentOwner}. Do not act as the main speaker unless the user re-addresses you.]`;
@@ -1056,11 +1069,20 @@ export function buildFeishuAgentBody(params: {
     } else if (collaboration.phase === "awaiting_accept" && collaboration.activeHandoff) {
       const activeHandoff = collaboration.activeHandoff;
       if (activeHandoff.targetAgentId === agentId) {
+        messageBody += `\n[System: ${activeHandoff.fromAgentId} is handing this task to you.]`;
+        if (activeHandoff.timeWindow) {
+          messageBody += `\n[System: Known time window: ${activeHandoff.timeWindow}.]`;
+        }
+        if (activeHandoff.currentFinding) {
+          messageBody += `\n[System: Current finding: ${activeHandoff.currentFinding}.]`;
+        }
+        if (activeHandoff.unresolvedQuestion) {
+          messageBody += `\n[System: Unresolved question: ${activeHandoff.unresolvedQuestion}.]`;
+        }
+        if (activeHandoff.evidencePaths.length > 0) {
+          messageBody += `\n[System: Evidence paths: ${activeHandoff.evidencePaths.join(", ")}.]`;
+        }
         messageBody +=
-          `\n[System: ${activeHandoff.fromAgentId} is handing this task to you.]` +
-          `\n[System: Known time window: ${activeHandoff.timeWindow}.]` +
-          `\n[System: Current finding: ${activeHandoff.currentFinding}.]` +
-          `\n[System: Unresolved question: ${activeHandoff.unresolvedQuestion}.]` +
           `\n[System: Do not call sessions_send, sessions_spawn, subagents, or message here. Accept, reject, or ask for missing information using the hidden control block only.]` +
           `\n[System: Reply briefly, then append exactly one hidden control block with action agent_handoff_accept, agent_handoff_reject, or agent_handoff_need_info using handoffId ${activeHandoff.handoffId}.]`;
       } else if (collaboration.isCurrentOwner) {
@@ -1540,6 +1562,7 @@ export async function handleFeishuMessage(params: {
         collaborationStateOverride?: typeof collaborationState;
         autoMentionTargetsOverride?: boolean;
         mentionTargetsOverride?: FeishuMessageContext["mentionTargets"];
+        messageIdOverride?: string;
       },
     ) => {
       const normalizedAgentId = normalizeAgentId(agentIdForBody);
@@ -1552,8 +1575,12 @@ export async function handleFeishuMessage(params: {
         : undefined;
       const baseCtx =
         options?.mentionTargetsOverride === undefined
-          ? ctx
-          : { ...ctx, mentionTargets: options.mentionTargetsOverride };
+          ? { ...ctx, messageId: options?.messageIdOverride ?? ctx.messageId }
+          : {
+              ...ctx,
+              messageId: options?.messageIdOverride ?? ctx.messageId,
+              mentionTargets: options.mentionTargetsOverride,
+            };
       const ctxForAgent = collaboration ? { ...baseCtx, collaboration } : baseCtx;
       const messageBody = buildFeishuAgentBody({
         ctx: ctxForAgent,
@@ -1611,7 +1638,7 @@ export async function handleFeishuMessage(params: {
         SenderId: ctx.senderOpenId,
         Provider: "feishu" as const,
         Surface: "feishu" as const,
-        MessageSid: ctx.messageId,
+        MessageSid: baseCtx.messageId,
         ReplyToBody: quotedContent ?? undefined,
         WasMentioned: wasMentioned,
         CommandAuthorized: commandAuthorized,
@@ -1672,7 +1699,7 @@ export async function handleFeishuMessage(params: {
         latestState.phase !== "awaiting_accept" ||
         !activeHandoff ||
         activeHandoff.handoffId === params.previousHandoffId ||
-        activeHandoff.fromAgentId !== normalizeAgentId(params.sourceAgentId)
+        normalizeAgentId(activeHandoff.fromAgentId) !== normalizeAgentId(params.sourceAgentId)
       ) {
         return;
       }
@@ -1695,6 +1722,7 @@ export async function handleFeishuMessage(params: {
           collaborationStateOverride: latestState,
           autoMentionTargetsOverride: false,
           mentionTargetsOverride: undefined,
+          messageIdOverride: `${ctx.messageId}::handoff::${activeHandoff.handoffId}::${targetAgentId}`,
         },
       );
       const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
@@ -1714,6 +1742,9 @@ export async function handleFeishuMessage(params: {
       log(
         `feishu[${account.accountId}]: collaboration handoff dispatch ${params.sourceAgentId} -> ${targetAgentId} (session=${targetSessionKey})`,
       );
+      const previousPhase = latestState.phase;
+      const previousOwner = latestState.currentOwner;
+      const previousSpeakerToken = latestState.speakerToken;
       await core.channel.reply.withReplyDispatcher({
         dispatcher,
         onSettled: () => {
@@ -1725,13 +1756,19 @@ export async function handleFeishuMessage(params: {
             cfg,
             dispatcher,
             replyOptions,
-              }),
+          }),
+      });
+      await maybeDispatchCurrentOwnerFollowup({
+        previousPhase,
+        previousOwner,
+        previousSpeakerToken,
       });
     };
 
-    const maybeDispatchActivatedOwner = async (params: {
+    const maybeDispatchCurrentOwnerFollowup = async (params: {
       previousPhase?: string;
       previousOwner?: string;
+      previousSpeakerToken?: string;
     }) => {
       if (!isGroup || !collaborationState) {
         return;
@@ -1740,11 +1777,11 @@ export async function handleFeishuMessage(params: {
       if (
         !latestState ||
         latestState.mode !== "peer_collab" ||
-        latestState.phase !== "active_collab" ||
+        (latestState.phase !== "active_collab" && latestState.phase !== "blocked_need_info") ||
         !latestState.currentOwner ||
-        params.previousPhase !== "initial_assessment" ||
-        (params.previousOwner === latestState.currentOwner &&
-          collaborationState.phase === latestState.phase)
+        (params.previousPhase === latestState.phase &&
+          params.previousOwner === latestState.currentOwner &&
+          params.previousSpeakerToken === latestState.speakerToken)
       ) {
         return;
       }
@@ -1767,6 +1804,7 @@ export async function handleFeishuMessage(params: {
           collaborationStateOverride: latestState,
           autoMentionTargetsOverride: false,
           mentionTargetsOverride: undefined,
+          messageIdOverride: `${ctx.messageId}::owner::${latestState.taskId}::${latestState.phase}::${latestState.handoffCount}::${ownerAgentId}`,
         },
       );
       const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
@@ -1786,6 +1824,10 @@ export async function handleFeishuMessage(params: {
       log(
         `feishu[${account.accountId}]: collaboration owner kickoff dispatch -> ${ownerAgentId} (session=${ownerSessionKey})`,
       );
+      const previousHandoffId = latestState.activeHandoffState?.handoffId;
+      const previousPhase = latestState.phase;
+      const previousOwner = latestState.currentOwner;
+      const previousSpeakerToken = latestState.speakerToken;
       await core.channel.reply.withReplyDispatcher({
         dispatcher,
         onSettled: () => {
@@ -1798,6 +1840,15 @@ export async function handleFeishuMessage(params: {
             dispatcher,
             replyOptions,
           }),
+      });
+      await maybeDispatchCurrentOwnerFollowup({
+        previousPhase,
+        previousOwner,
+        previousSpeakerToken,
+      });
+      await maybeDispatchPendingHandoff({
+        sourceAgentId: ownerAgentId,
+        previousHandoffId,
       });
     };
 
@@ -1988,6 +2039,7 @@ export async function handleFeishuMessage(params: {
       const previousHandoffId = collaborationState?.activeHandoffState?.handoffId;
       const previousCollaborationPhase = collaborationState?.phase;
       const previousCollaborationOwner = collaborationState?.currentOwner;
+      const previousCollaborationSpeakerToken = collaborationState?.speakerToken;
       log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
       const { queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
         dispatcher,
@@ -2014,9 +2066,10 @@ export async function handleFeishuMessage(params: {
       log(
         `feishu[${account.accountId}]: dispatch complete (queuedFinal=${queuedFinal}, replies=${counts.final})`,
       );
-      await maybeDispatchActivatedOwner({
+      await maybeDispatchCurrentOwnerFollowup({
         previousPhase: previousCollaborationPhase,
         previousOwner: previousCollaborationOwner,
+        previousSpeakerToken: previousCollaborationSpeakerToken,
       });
       await maybeDispatchPendingHandoff({
         sourceAgentId: route.agentId,

@@ -294,31 +294,48 @@ function toHandoffAction(value: unknown): CollaborationHandoffAction | null {
   if (action.action !== "agent_handoff") {
     return null;
   }
+  const targetAgentId =
+    typeof action.targetAgentId === "string"
+      ? action.targetAgentId
+      : typeof action.handoffTo === "string"
+        ? action.handoffTo
+        : undefined;
+  const fromAgentId =
+    typeof action.fromAgentId === "string"
+      ? action.fromAgentId
+      : typeof action.agentId === "string"
+        ? action.agentId
+        : undefined;
   if (
     typeof action.taskId !== "string" ||
-    typeof action.handoffId !== "string" ||
-    typeof action.fromAgentId !== "string" ||
-    typeof action.targetAgentId !== "string" ||
-    typeof action.timeWindow !== "string" ||
-    typeof action.currentFinding !== "string" ||
-    typeof action.unresolvedQuestion !== "string" ||
-    !Array.isArray(action.evidencePaths)
+    !fromAgentId ||
+    !targetAgentId
   ) {
     return null;
   }
-  const evidencePaths = action.evidencePaths.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
-  if (evidencePaths.length === 0) {
-    return null;
-  }
+  const evidencePaths = Array.isArray(action.evidencePaths)
+    ? action.evidencePaths.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : [];
+  const handoffReason =
+    typeof action.handoffReason === "string" ? action.handoffReason.trim() : undefined;
   return {
     action: "agent_handoff",
     taskId: action.taskId,
-    handoffId: action.handoffId,
-    fromAgentId: action.fromAgentId,
-    targetAgentId: action.targetAgentId,
-    timeWindow: action.timeWindow,
-    currentFinding: action.currentFinding,
-    unresolvedQuestion: action.unresolvedQuestion,
+    handoffId:
+      typeof action.handoffId === "string" && action.handoffId.trim().length > 0
+        ? action.handoffId
+        : `handoff_${hashText(JSON.stringify({ taskId: action.taskId, fromAgentId, targetAgentId, handoffReason }))}`,
+    fromAgentId,
+    targetAgentId,
+    timeWindow: typeof action.timeWindow === "string" ? action.timeWindow : "",
+    currentFinding:
+      typeof action.currentFinding === "string"
+        ? action.currentFinding
+        : handoffReason ?? "",
+    unresolvedQuestion:
+      typeof action.unresolvedQuestion === "string"
+        ? action.unresolvedQuestion
+        : handoffReason ?? "",
     evidencePaths,
   };
 }
