@@ -106,10 +106,14 @@ const prepareSyntheticHarnessConfig = (cfg: ClawdbotConfig): ClawdbotConfig => {
     return cloned;
   }
   feishu.resolveSenderNames = false;
+  feishu.streaming = false;
+  feishu.renderMode = "raw";
   const accounts = feishu.accounts as Record<string, Record<string, unknown>> | undefined;
   if (accounts && typeof accounts === "object") {
     for (const account of Object.values(accounts)) {
       account.resolveSenderNames = false;
+      account.streaming = false;
+      account.renderMode = "raw";
     }
   }
   return cloned;
