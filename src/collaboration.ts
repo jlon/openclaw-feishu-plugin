@@ -89,6 +89,8 @@ export type CollaborationState = {
   mode: CollaborationMode;
   phase: CollaborationPhase;
   participants: string[];
+  maxHops: number;
+  handoffCount: number;
   currentOwner?: string;
   speakerToken?: string;
   assessments: Record<string, CollaborationAssessment>;
@@ -101,6 +103,8 @@ export type CollaborationRuntimeContext = {
   mode: CollaborationMode;
   phase: CollaborationPhase;
   participants: string[];
+  maxHops: number;
+  handoffCount: number;
   currentOwner?: string;
   speakerToken?: string;
   isCurrentOwner: boolean;
@@ -195,6 +199,7 @@ export function ensureCollaborationState(params: {
   messageId: string;
   mode: CollaborationMode;
   participants: string[];
+  maxHops: number;
 }): CollaborationState {
   sweepExpiredCollaborationStates();
   const stateKey = buildCollaborationStateKey(params);
@@ -217,6 +222,8 @@ export function ensureCollaborationState(params: {
     mode: params.mode,
     phase: params.mode === "coordinate" ? "active_collab" : "initial_assessment",
     participants: normalizedParticipants,
+    maxHops: params.maxHops,
+    handoffCount: 0,
     currentOwner: params.mode === "coordinate" ? "main" : undefined,
     speakerToken: params.mode === "coordinate" ? "main" : undefined,
     assessments: {},
@@ -474,6 +481,7 @@ export function applyCollaborationActions(actions: CollaborationControlAction[])
     }
     if (action.action === "agent_handoff") {
       if (
+        state.handoffCount >= state.maxHops ||
         state.currentOwner !== action.fromAgentId ||
         !state.participants.includes(action.targetAgentId) ||
         (state.phase !== "active_collab" &&
@@ -539,6 +547,7 @@ export function applyCollaborationActions(actions: CollaborationControlAction[])
         replaceState({
           ...state,
           phase: "active_collab",
+          handoffCount: state.handoffCount + 1,
           currentOwner: action.agentId,
           speakerToken: action.agentId,
           activeHandoffState: undefined,
@@ -614,7 +623,10 @@ export function buildCollaborationRuntimeContext(params: {
   if (params.state.mode === "peer_collab" && params.state.phase === "initial_assessment") {
     allowedActions.push("collab_assess");
   } else if (params.state.phase === "active_collab" && isCurrentOwner) {
-    allowedActions.push("agent_handoff", "agent_handoff_complete");
+    if (params.state.handoffCount < params.state.maxHops) {
+      allowedActions.push("agent_handoff");
+    }
+    allowedActions.push("agent_handoff_complete");
   } else if (
     params.state.phase === "awaiting_accept" &&
     activeHandoff?.targetAgentId === params.agentId
@@ -634,6 +646,8 @@ export function buildCollaborationRuntimeContext(params: {
     mode: params.state.mode,
     phase: params.state.phase,
     participants: params.state.participants,
+    maxHops: params.state.maxHops,
+    handoffCount: params.state.handoffCount,
     currentOwner: params.state.currentOwner,
     speakerToken: params.state.speakerToken,
     isCurrentOwner,
@@ -671,6 +685,7 @@ export function resolveCollaborationStateForMessage(params: {
   event: FeishuMessageEvent;
   mode: CollaborationMode;
   participants: string[];
+  maxHops: number;
 }): CollaborationState {
   return ensureCollaborationState({
     chatId: params.event.message.chat_id,
@@ -679,5 +694,6 @@ export function resolveCollaborationStateForMessage(params: {
     messageId: params.event.message.message_id,
     mode: params.mode,
     participants: params.participants,
+    maxHops: params.maxHops,
   });
 }

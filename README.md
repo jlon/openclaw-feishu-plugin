@@ -28,7 +28,9 @@
 - 群消息仲裁与多 Agent 群协作协议
 - `main` 默认入口、专业 Agent 显式点名、共同点名直答
 - `peer_collab / coordinate` 两类复杂协作模式
+- `peer_collab` 下的持续下钻与受控多轮接棒
 - owner、handoff、accept/reject/need_info/complete 协作状态机
+- `channels.feishu.collaboration.maxHops` 下钻深度控制
 - 流式回复去重、内部控制块剥离、错误 `@` 清洗
 - 群参与者视图 `feishu_chat(action="participants")`
 
@@ -166,6 +168,7 @@ flowchart LR
 预期：
 - 进入 `peer_collab`
 - 可以持续下钻
+- 默认最多接棒 `3` 次
 - 不是各说一句就结束
 
 ### 场景 3：main 编排并收口
@@ -209,6 +212,57 @@ flowchart LR
 
 - 新增了 `feishu_chat(action="participants")` 视图，用来回答“这个群里有哪些可见成员和内部机器人参与者”
 - 群协作协议新增了 `direct_reply / peer_collab / coordinate` 行为分流，但这不是新的配置字段，而是运行时行为增强
+- 新增了 `channels.feishu.collaboration.maxHops`，用来限制 `peer_collab / coordinate` 下的结构化接棒深度
+
+### 持续下钻与 `maxHops`
+
+当前增强版支持“受控多轮下钻”，但不是无限互相转发。
+
+约束规则：
+- 只限制结构化 `agent_handoff` 深度
+- 不限制初始并行判断
+- 不统计失败或被拒绝的 handoff
+- 只统计成功 `accept` 的接棒次数
+
+默认值：
+
+```json
+{
+  "channels": {
+    "feishu": {
+      "collaboration": {
+        "maxHops": 3
+      }
+    }
+  }
+}
+```
+
+也支持按账号单独覆盖：
+
+```json
+{
+  "channels": {
+    "feishu": {
+      "collaboration": {
+        "maxHops": 3
+      },
+      "accounts": {
+        "main": {
+          "collaboration": {
+            "maxHops": 2
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+含义：
+- `maxHops=1`：只允许一次成功接棒，适合非常保守的协作
+- `maxHops=3`：当前默认值，适合多数群排障场景
+- 更大的值只在你确认 prompt、owner 和 handoff 行为已经稳定时再开
 
 兼容边界：
 

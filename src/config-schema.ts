@@ -96,6 +96,13 @@ const FeishuToolsConfigSchema = z
   .strict()
   .optional();
 
+const CollaborationConfigSchema = z
+  .object({
+    maxHops: z.number().int().positive().optional(),
+  })
+  .strict()
+  .optional();
+
 /**
  * Group session scope for routing Feishu group messages.
  * - "group" (default): one session per group chat
@@ -174,6 +181,7 @@ const FeishuSharedConfigShape = {
   reactionNotifications: ReactionNotificationModeSchema,
   typingIndicator: z.boolean().optional(),
   resolveSenderNames: z.boolean().optional(),
+  collaboration: CollaborationConfigSchema,
 };
 
 /**

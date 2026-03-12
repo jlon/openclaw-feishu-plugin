@@ -166,6 +166,43 @@ describe("FeishuConfigSchema optimization flags", () => {
   });
 });
 
+describe("FeishuConfigSchema collaboration", () => {
+  it("accepts top-level collaboration maxHops", () => {
+    const result = FeishuConfigSchema.parse({
+      collaboration: {
+        maxHops: 4,
+      },
+    });
+    expect(result.collaboration?.maxHops).toBe(4);
+  });
+
+  it("accepts account-level collaboration maxHops", () => {
+    const result = FeishuConfigSchema.parse({
+      collaboration: {
+        maxHops: 4,
+      },
+      accounts: {
+        main: {
+          collaboration: {
+            maxHops: 2,
+          },
+        },
+      },
+    });
+    expect(result.collaboration?.maxHops).toBe(4);
+    expect(result.accounts?.main?.collaboration?.maxHops).toBe(2);
+  });
+
+  it("rejects non-positive collaboration maxHops", () => {
+    const result = FeishuConfigSchema.safeParse({
+      collaboration: {
+        maxHops: 0,
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("FeishuConfigSchema defaultAccount", () => {
   it("accepts defaultAccount when it matches an account key", () => {
     const result = FeishuConfigSchema.safeParse({

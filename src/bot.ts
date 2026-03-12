@@ -113,6 +113,7 @@ const senderNameCache = new Map<string, { name: string; expireAt: number }>();
 // Key: appId or "default", Value: timestamp of last notification
 const permissionErrorNotifiedAt = new Map<string, number>();
 const PERMISSION_ERROR_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+const DEFAULT_COLLABORATION_MAX_HOPS = 3;
 
 function sweepSenderNameCache(now = Date.now()): void {
   for (const [key, value] of senderNameCache.entries()) {
@@ -1025,7 +1026,8 @@ export function buildFeishuAgentBody(params: {
     const collaboration = ctx.collaboration;
     messageBody +=
       `\n\n[System: Collaboration task ${collaboration.taskId}. ` +
-      `Mode=${collaboration.mode}. Phase=${collaboration.phase}. Participants=${collaboration.participants.join(", ")}.]`;
+      `Mode=${collaboration.mode}. Phase=${collaboration.phase}. Participants=${collaboration.participants.join(", ")}. ` +
+      `HandoffDepth=${collaboration.handoffCount}/${collaboration.maxHops}.]`;
     if (collaboration.allowedActions.length > 0) {
       messageBody += `\n[System: AllowedActions=${collaboration.allowedActions.join(",")}.]`;
     }
@@ -1148,10 +1150,15 @@ export async function handleFeishuMessage(params: {
     if (groupCoAddressMode !== "none") {
       ctx = { ...ctx, groupCoAddressMode };
       if (groupCoAddressMode === "peer_collab" || groupCoAddressMode === "coordinate") {
+        const collaborationMaxHops =
+          feishuCfg?.accounts?.[account.accountId]?.collaboration?.maxHops ??
+          feishuCfg?.collaboration?.maxHops ??
+          DEFAULT_COLLABORATION_MAX_HOPS;
         collaborationState = resolveCollaborationStateForMessage({
           event,
           mode: groupCoAddressMode,
           participants: mentionedBotAccountIds,
+          maxHops: collaborationMaxHops,
         });
       }
     }
@@ -1618,6 +1625,8 @@ export async function handleFeishuMessage(params: {
           collaboration && collaboration.participants.length > 0
             ? collaboration.participants.join(",")
             : undefined,
+        CollaborationMaxHops: collaboration?.maxHops,
+        CollaborationHandoffCount: collaboration?.handoffCount,
         CollaborationCurrentOwner: collaboration?.currentOwner,
         CollaborationSpeakerToken: collaboration?.speakerToken,
         CollaborationIsCurrentOwner: collaboration?.isCurrentOwner,

@@ -126,6 +126,7 @@ describe("collaboration state", () => {
       messageId: "msg_4",
       mode: "coordinate",
       participants: ["main", "flink-sre"],
+      maxHops: 4,
     });
     const ctx = buildCollaborationRuntimeContext({
       state,
@@ -138,10 +139,128 @@ describe("collaboration state", () => {
       participants: ["main", "flink-sre"],
       currentOwner: "main",
       speakerToken: "main",
+      handoffCount: 0,
+      maxHops: 4,
       isCurrentOwner: true,
       activeHandoff: undefined,
       allowedActions: ["agent_handoff", "agent_handoff_complete"],
     });
+  });
+
+  it("increments handoff count after a successful accept", () => {
+    const state = ensureCollaborationState({
+      chatId: "oc_group_1",
+      messageId: "msg_handoff_count",
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre"],
+      maxHops: 3,
+    });
+    applyCollaborationActions([
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "flink-sre",
+        ownershipClaim: "owner_candidate",
+      },
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "starrocks-sre",
+        ownershipClaim: "supporting",
+      },
+      {
+        action: "agent_handoff",
+        taskId: state.taskId,
+        handoffId: "handoff_count_1",
+        fromAgentId: "flink-sre",
+        targetAgentId: "starrocks-sre",
+        timeWindow: "18:20-18:35",
+        currentFinding: "sink 吞吐下降",
+        unresolvedQuestion: "查询层是否是独立源头",
+        evidencePaths: ["shared/tasks/task_x/evidence/02-compute.md"],
+      },
+      {
+        action: "agent_handoff_accept",
+        taskId: state.taskId,
+        handoffId: "handoff_count_1",
+        agentId: "starrocks-sre",
+      },
+    ]);
+    const finalState = getCollaborationStateForTesting(state.taskId);
+    expect(finalState?.handoffCount).toBe(1);
+    expect(finalState?.currentOwner).toBe("starrocks-sre");
+  });
+
+  it("disallows further handoff after maxHops is reached", () => {
+    const state = ensureCollaborationState({
+      chatId: "oc_group_1",
+      messageId: "msg_max_hops",
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre", "coder"],
+      maxHops: 1,
+    });
+    applyCollaborationActions([
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "flink-sre",
+        ownershipClaim: "owner_candidate",
+      },
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "starrocks-sre",
+        ownershipClaim: "supporting",
+      },
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "coder",
+        ownershipClaim: "observer",
+      },
+      {
+        action: "agent_handoff",
+        taskId: state.taskId,
+        handoffId: "handoff_max_1",
+        fromAgentId: "flink-sre",
+        targetAgentId: "starrocks-sre",
+        timeWindow: "18:20-18:35",
+        currentFinding: "sink 吞吐下降",
+        unresolvedQuestion: "查询层是否是独立源头",
+        evidencePaths: ["shared/tasks/task_x/evidence/02-compute.md"],
+      },
+      {
+        action: "agent_handoff_accept",
+        taskId: state.taskId,
+        handoffId: "handoff_max_1",
+        agentId: "starrocks-sre",
+      },
+    ]);
+    const stateAfterAccept = getCollaborationStateForTesting(state.taskId);
+    const ctx = buildCollaborationRuntimeContext({
+      state: stateAfterAccept!,
+      agentId: "starrocks-sre",
+    });
+    expect(ctx.handoffCount).toBe(1);
+    expect(ctx.maxHops).toBe(1);
+    expect(ctx.allowedActions).toEqual(["agent_handoff_complete"]);
+    applyCollaborationActions([
+      {
+        action: "agent_handoff",
+        taskId: state.taskId,
+        handoffId: "handoff_max_2",
+        fromAgentId: "starrocks-sre",
+        targetAgentId: "coder",
+        timeWindow: "18:36-18:40",
+        currentFinding: "需要补充日志和截图",
+        unresolvedQuestion: "确认日志里是否有错误堆栈",
+        evidencePaths: ["shared/tasks/task_x/evidence/03-serving.md"],
+      },
+    ]);
+    const finalState = getCollaborationStateForTesting(state.taskId);
+    expect(finalState?.activeHandoffState).toBeUndefined();
+    expect(finalState?.currentOwner).toBe("starrocks-sre");
+    expect(finalState?.handoffCount).toBe(1);
   });
 
   it("moves active owner into awaiting_accept when handoff is created", () => {

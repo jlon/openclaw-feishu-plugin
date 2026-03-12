@@ -739,6 +739,8 @@ describe("handleFeishuMessage command authorization", () => {
           participants: ["flink-sre", "starrocks-sre"],
           currentOwner: "flink-sre",
           speakerToken: "flink-sre",
+          handoffCount: 0,
+          maxHops: 3,
           isCurrentOwner: true,
           allowedActions: ["agent_handoff", "agent_handoff_complete"],
         },
@@ -751,6 +753,75 @@ describe("handleFeishuMessage command authorization", () => {
     expect(body).toContain("You are the current owner of this collaboration.");
     expect(body).toContain("Do not call sessions_send, sessions_spawn, subagents, or message");
     expect(body).toContain("append exactly one hidden control block with action agent_handoff");
+  });
+
+  it("injects collaboration max hops and handoff count into runtime context", async () => {
+    botOpenIds.set("flink-sre", "ou_flink");
+    botOpenIds.set("starrocks-sre", "ou_starrocks");
+    botNames.set("flink-sre", "Flink-SRE");
+    botNames.set("starrocks-sre", "Starrocks-SRE");
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-user",
+        },
+      },
+      message: {
+        message_id: "msg-collab-max-hops",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({
+          text: '<at user_id="ou_flink">@_user_1</at> <at user_id="ou_starrocks">@_user_2</at> 你俩协作排查下',
+        }),
+        mentions: [
+          {
+            key: "@_user_1",
+            id: { open_id: "ou_flink" },
+            name: "Flink-SRE",
+            tenant_key: "",
+          },
+          {
+            key: "@_user_2",
+            id: { open_id: "ou_starrocks" },
+            name: "Starrocks-SRE",
+            tenant_key: "",
+          },
+        ],
+      },
+    };
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          collaboration: {
+            maxHops: 2,
+          },
+        },
+      },
+    } as ClawdbotConfig;
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "flink-sre",
+      channel: "feishu",
+      accountId: "flink-sre",
+      sessionKey: "agent:flink-sre:feishu:group:oc-group",
+      mainSessionKey: "agent:main:main",
+      matchedBy: "explicit",
+    });
+    await handleFeishuMessage({
+      cfg,
+      event,
+      accountId: "flink-sre",
+      botOpenId: "ou_flink",
+      botName: "Flink-SRE",
+      runtime: createRuntimeEnv(),
+    });
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        CollaborationTaskId: expect.stringMatching(/^task_[0-9a-f]{12}$/),
+        CollaborationHandoffCount: 0,
+        CollaborationMaxHops: 2,
+      }),
+    );
   });
 
   it("uses authorizer resolution instead of hardcoded CommandAuthorized=true", async () => {
