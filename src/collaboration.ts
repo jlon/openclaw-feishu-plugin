@@ -93,6 +93,7 @@ export type CollaborationState = {
   handoffCount: number;
   currentOwner?: string;
   speakerToken?: string;
+  coordinateDispatchedAgents: string[];
   assessments: Record<string, CollaborationAssessment>;
   activeHandoffState?: CollaborationActiveHandoffState;
   updatedAtMs: number;
@@ -226,6 +227,7 @@ export function ensureCollaborationState(params: {
     handoffCount: 0,
     currentOwner: params.mode === "coordinate" ? "main" : undefined,
     speakerToken: params.mode === "coordinate" ? "main" : undefined,
+    coordinateDispatchedAgents: [],
     assessments: {},
     updatedAtMs: Date.now(),
   };
@@ -670,6 +672,44 @@ export function buildCollaborationRuntimeContext(params: {
     isCurrentOwner,
     activeHandoff,
     allowedActions,
+  };
+}
+
+export function claimPendingCoordinateParticipants(taskId: string): {
+  state?: CollaborationState;
+  targets: string[];
+} {
+  sweepExpiredCollaborationStates();
+  const state = collaborationStateByTaskId.get(taskId);
+  if (
+    !state ||
+    state.mode !== "coordinate" ||
+    state.phase !== "active_collab" ||
+    state.currentOwner !== "main" ||
+    state.activeHandoffState
+  ) {
+    return {
+      state,
+      targets: [],
+    };
+  }
+  const targets = state.participants.filter(
+    (agentId) =>
+      agentId !== state.currentOwner && !state.coordinateDispatchedAgents.includes(agentId),
+  );
+  if (targets.length === 0) {
+    return {
+      state,
+      targets,
+    };
+  }
+  const nextState = replaceState({
+    ...state,
+    coordinateDispatchedAgents: [...state.coordinateDispatchedAgents, ...targets],
+  });
+  return {
+    state: nextState,
+    targets,
   };
 }
 

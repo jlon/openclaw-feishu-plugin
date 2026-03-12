@@ -36,6 +36,7 @@ import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, sendMessageFeishu } from "./send.js";
 import {
   buildCollaborationRuntimeContext,
+  claimPendingCoordinateParticipants,
   getCollaborationState,
   resolveCollaborationStateForMessage,
   type CollaborationRuntimeContext,
@@ -1049,29 +1050,43 @@ export function buildFeishuAgentBody(params: {
     } else if (collaboration.phase === "active_collab") {
       if (collaboration.isCurrentOwner) {
         const canHandoff = collaboration.allowedActions.includes("agent_handoff");
-        messageBody +=
-          `\n[System: You are the current owner of this collaboration. Drive the next step and keep others in-role.]` +
-          `\n[System: Do not call sessions_send, sessions_spawn, subagents, or message to make another participant speak. Use hidden control blocks only.]`;
-        if (canHandoff) {
+        if (collaboration.mode === "coordinate" && agentId === "main") {
           messageBody +=
-            `\n[System: Visible reply should first add one deeper point from your own role in one or two short sentences.]` +
-            `\n[System: If you hand off, explicitly cue the next participant in plain words in the visible reply before the hidden control block.]` +
-            `\n[System: After the visible baton cue, stop. Do not add extra '收到' or '等待对方' style follow-up lines.]` +
-            `\n[System: If you need to pass the lead, append exactly one hidden control block in this format:` +
-            `\n\`\`\`openclaw-collab` +
-            `\n{"action":"agent_handoff","taskId":"${collaboration.taskId}","agentId":"${agentId}","handoffTo":"target-agent-id","handoffReason":"一句话说明为什么交给对方"}` +
-            `\n\`\`\`` +
-            `\n[System: If your current stage is complete, append exactly one hidden control block with action agent_handoff_complete.]`;
+            `\n[System: You are coordinating this task. Your visible reply should acknowledge the request, assign the relevant participants in parallel, and set the expected output.]` +
+            `\n[System: In this first coordinator turn, do not append an agent_handoff control block. The mentioned specialists will be dispatched automatically.]` +
+            `\n[System: Do not speak on behalf of specialists. Keep the visible reply to one or two short sentences.]`;
         } else {
           messageBody +=
-            `\n[System: The handoff limit has been reached for this task.]` +
-            `\n[System: Use the findings already gathered in this task to produce the best current conclusion you can from your role.]` +
-            `\n[System: Do not defer the conclusion back to the user or ask another participant to finish it for you.]` +
-            `\n[System: Finish from your own role and append exactly one hidden control block with action agent_handoff_complete.]`;
+            `\n[System: You are the current owner of this collaboration. Drive the next step and keep others in-role.]` +
+            `\n[System: Do not call sessions_send, sessions_spawn, subagents, or message to make another participant speak. Use hidden control blocks only.]`;
+          if (canHandoff) {
+            messageBody +=
+              `\n[System: Visible reply should first add one deeper point from your own role in one or two short sentences.]` +
+              `\n[System: If you hand off, explicitly cue the next participant in plain words in the visible reply before the hidden control block.]` +
+              `\n[System: After the visible baton cue, stop. Do not add extra '收到' or '等待对方' style follow-up lines.]` +
+              `\n[System: If you need to pass the lead, append exactly one hidden control block in this format:` +
+              `\n\`\`\`openclaw-collab` +
+              `\n{"action":"agent_handoff","taskId":"${collaboration.taskId}","agentId":"${agentId}","handoffTo":"target-agent-id","handoffReason":"一句话说明为什么交给对方"}` +
+              `\n\`\`\`` +
+              `\n[System: If your current stage is complete, append exactly one hidden control block with action agent_handoff_complete.]`;
+          } else {
+            messageBody +=
+              `\n[System: The handoff limit has been reached for this task.]` +
+              `\n[System: Use the findings already gathered in this task to produce the best current conclusion you can from your role.]` +
+              `\n[System: Do not defer the conclusion back to the user or ask another participant to finish it for you.]` +
+              `\n[System: Finish from your own role and append exactly one hidden control block with action agent_handoff_complete.]`;
+          }
         }
       } else if (collaboration.currentOwner) {
-        messageBody +=
-          `\n[System: Current owner is ${collaboration.currentOwner}. Do not act as the main speaker unless the user re-addresses you.]`;
+        if (collaboration.mode === "coordinate") {
+          messageBody +=
+            `\n[System: Current owner is ${collaboration.currentOwner}. You are participating as a specialist in a coordinated task.]` +
+            `\n[System: Visible reply should be exactly one short sentence from your own role: your first check, finding, or next step.]` +
+            `\n[System: Do not @ other participants, do not summarize for the coordinator, do not append completion chatter, and do not emit hidden control blocks unless AllowedActions explicitly says so.]`;
+        } else {
+          messageBody +=
+            `\n[System: Current owner is ${collaboration.currentOwner}. Do not act as the main speaker unless the user re-addresses you.]`;
+        }
       }
     } else if (collaboration.phase === "awaiting_accept" && collaboration.activeHandoff) {
       const activeHandoff = collaboration.activeHandoff;
@@ -1754,17 +1769,21 @@ export async function handleFeishuMessage(params: {
       const previousPhase = latestState.phase;
       const previousOwner = latestState.currentOwner;
       const previousSpeakerToken = latestState.speakerToken;
-      await core.channel.reply.withReplyDispatcher({
-        dispatcher,
-        onSettled: () => {
-          markDispatchIdle();
-        },
+      await runCollaborationDispatchWithRetry({
+        log: (message) => log(`feishu[${account.accountId}]: ${message}`),
         run: () =>
-          core.channel.reply.dispatchReplyFromConfig({
-            ctx: targetCtxPayload,
-            cfg,
+          core.channel.reply.withReplyDispatcher({
             dispatcher,
-            replyOptions,
+            onSettled: () => {
+              markDispatchIdle();
+            },
+            run: () =>
+              core.channel.reply.dispatchReplyFromConfig({
+                ctx: targetCtxPayload,
+                cfg,
+                dispatcher,
+                replyOptions,
+              }),
           }),
       });
       await maybeDispatchCurrentOwnerFollowup({
@@ -1837,17 +1856,21 @@ export async function handleFeishuMessage(params: {
       const previousPhase = latestState.phase;
       const previousOwner = latestState.currentOwner;
       const previousSpeakerToken = latestState.speakerToken;
-      await core.channel.reply.withReplyDispatcher({
-        dispatcher,
-        onSettled: () => {
-          markDispatchIdle();
-        },
+      await runCollaborationDispatchWithRetry({
+        log: (message) => log(`feishu[${account.accountId}]: ${message}`),
         run: () =>
-          core.channel.reply.dispatchReplyFromConfig({
-            ctx: ownerCtxPayload,
-            cfg,
+          core.channel.reply.withReplyDispatcher({
             dispatcher,
-            replyOptions,
+            onSettled: () => {
+              markDispatchIdle();
+            },
+            run: () =>
+              core.channel.reply.dispatchReplyFromConfig({
+                ctx: ownerCtxPayload,
+                cfg,
+                dispatcher,
+                replyOptions,
+              }),
           }),
       });
       await maybeDispatchCurrentOwnerFollowup({
@@ -1859,6 +1882,81 @@ export async function handleFeishuMessage(params: {
         sourceAgentId: ownerAgentId,
         previousHandoffId,
       });
+    };
+
+    const maybeDispatchCoordinateParticipants = async () => {
+      if (!isGroup || !collaborationState) {
+        return;
+      }
+      const claim = claimPendingCoordinateParticipants(collaborationState.taskId);
+      if (!claim.state || claim.targets.length === 0) {
+        return;
+      }
+      const dispatchTarget = async (targetAgentId: string) => {
+        const targetAccountId = resolveHandoffTargetAccountId(targetAgentId);
+        const targetSessionKey = core.channel.routing.buildAgentSessionKey({
+          agentId: targetAgentId,
+          channel: "feishu",
+          peer: {
+            kind: isGroup ? "group" : "direct",
+            id: peerId,
+          },
+        });
+        const targetCtxPayload = buildCtxPayloadForAgent(
+          targetSessionKey,
+          targetAccountId,
+          true,
+          targetAgentId,
+          {
+            collaborationStateOverride: claim.state,
+            autoMentionTargetsOverride: false,
+            mentionTargetsOverride: undefined,
+            messageIdOverride: `${ctx.messageId}::coordinate::${claim.state.taskId}::${targetAgentId}`,
+          },
+        );
+        const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
+          cfg,
+          agentId: targetAgentId,
+          runtime: runtime as RuntimeEnv,
+          chatId: ctx.chatId,
+          replyToMessageId: replyTargetMessageId,
+          skipReplyToInMessages: !isGroup,
+          replyInThread,
+          rootId: ctx.rootId,
+          threadReply,
+          mentionTargets: undefined,
+          accountId: targetAccountId,
+          messageCreateTimeMs,
+        });
+        log(
+          `feishu[${account.accountId}]: coordinate participant dispatch -> ${targetAgentId} (session=${targetSessionKey})`,
+        );
+        await runCollaborationDispatchWithRetry({
+          log: (message) => log(`feishu[${account.accountId}]: ${message}`),
+          run: () =>
+            core.channel.reply.withReplyDispatcher({
+              dispatcher,
+              onSettled: () => {
+                markDispatchIdle();
+              },
+              run: () =>
+                core.channel.reply.dispatchReplyFromConfig({
+                  ctx: targetCtxPayload,
+                  cfg,
+                  dispatcher,
+                  replyOptions,
+                }),
+            }),
+        });
+      };
+      const results = await Promise.allSettled(claim.targets.map(dispatchTarget));
+      for (let i = 0; i < results.length; i++) {
+        if (results[i].status === "rejected") {
+          log(
+            `feishu[${account.accountId}]: coordinate participant dispatch failed for ${claim.targets[i]}: ${String((results[i] as PromiseRejectedResult).reason)}`,
+          );
+        }
+      }
     };
 
     // Parse message create_time (Feishu uses millisecond epoch string).
@@ -2075,6 +2173,7 @@ export async function handleFeishuMessage(params: {
       log(
         `feishu[${account.accountId}]: dispatch complete (queuedFinal=${queuedFinal}, replies=${counts.final})`,
       );
+      await maybeDispatchCoordinateParticipants();
       await maybeDispatchCurrentOwnerFollowup({
         previousPhase: previousCollaborationPhase,
         previousOwner: previousCollaborationOwner,
@@ -2093,6 +2192,34 @@ export async function handleFeishuMessage(params: {
 export function clearBotCachesForTesting(): void {
   senderNameCache.clear();
   permissionErrorNotifiedAt.clear();
+}
+
+export const isSessionFileLockError = (error: unknown): boolean =>
+  (error instanceof Error ? error.message : String(error)).includes("session file locked");
+
+export async function runCollaborationDispatchWithRetry<T>(params: {
+  run: () => Promise<T>;
+  log?: (message: string) => void;
+  retryDelaysMs?: readonly number[];
+  sleep?: (delayMs: number) => Promise<void>;
+}): Promise<T> {
+  const retryDelaysMs = params.retryDelaysMs ?? [150, 300, 600];
+  const sleep = params.sleep ?? ((delayMs: number) => new Promise<void>((resolve) => setTimeout(resolve, delayMs)));
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
+    try {
+      return await params.run();
+    } catch (error) {
+      lastError = error;
+      if (!isSessionFileLockError(error) || attempt === retryDelaysMs.length) {
+        throw error;
+      }
+      const delayMs = retryDelaysMs[attempt] ?? retryDelaysMs[retryDelaysMs.length - 1] ?? 0;
+      params.log?.(`collaboration dispatch retry after session lock: attempt=${attempt + 1} delayMs=${delayMs}`);
+      await sleep(delayMs);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 export function primeBotCachesForTesting(params: {

@@ -15,8 +15,10 @@ import {
   clearBotCachesForTesting,
   getBotCacheStatsForTesting,
   handleFeishuMessage,
+  isSessionFileLockError,
   primeBotCachesForTesting,
   resolveBroadcastAgents,
+  runCollaborationDispatchWithRetry,
   sweepBotCachesForTesting,
   toMessageResourceType,
 } from "./bot.js";
@@ -211,6 +213,71 @@ describe("buildFeishuAgentBody", () => {
     expect(body).toContain("Do not cue another participant");
     expect(body).toContain("Do not send follow-up confirmation");
   });
+
+  it("tells the coordinator to assign specialists in parallel without initial handoff", () => {
+    const body = buildFeishuAgentBody({
+      ctx: {
+        content: "user: @首席大管家 @Flink-SRE @Starrocks-SRE 帮我安排并汇总这次排查",
+        senderName: "user",
+        senderOpenId: "ou_sender",
+        messageId: "msg-coordinate-owner",
+        hasAnyMention: true,
+        groupCoAddressMode: "coordinate",
+        collaboration: {
+          taskId: "task_coordinate_owner",
+          mode: "coordinate",
+          phase: "active_collab",
+          participants: ["main", "flink-sre", "starrocks-sre"],
+          currentOwner: "main",
+          speakerToken: "main",
+          handoffCount: 0,
+          maxHops: 3,
+          isCurrentOwner: true,
+          allowedActions: ["agent_handoff", "agent_handoff_complete"],
+        },
+      },
+      botOpenId: "ou_main",
+      autoMentionTargets: false,
+      agentId: "main",
+    });
+
+    expect(body).toContain("You are coordinating this task.");
+    expect(body).toContain("assign the relevant participants in parallel");
+    expect(body).toContain("do not append an agent_handoff control block");
+  });
+
+  it("tells coordinate specialists to send one concise role update only", () => {
+    const body = buildFeishuAgentBody({
+      ctx: {
+        content: "user: @首席大管家 @Flink-SRE @Starrocks-SRE 帮我安排并汇总这次排查",
+        senderName: "user",
+        senderOpenId: "ou_sender",
+        messageId: "msg-coordinate-specialist",
+        hasAnyMention: true,
+        groupCoAddressMode: "coordinate",
+        collaboration: {
+          taskId: "task_coordinate_specialist",
+          mode: "coordinate",
+          phase: "active_collab",
+          participants: ["main", "flink-sre", "starrocks-sre"],
+          currentOwner: "main",
+          speakerToken: "main",
+          handoffCount: 0,
+          maxHops: 3,
+          isCurrentOwner: false,
+          allowedActions: [],
+        },
+      },
+      botOpenId: "ou_flink",
+      autoMentionTargets: false,
+      agentId: "flink-sre",
+    });
+
+    expect(body).toContain("participating as a specialist in a coordinated task");
+    expect(body).toContain("Visible reply should be exactly one short sentence");
+    expect(body).toContain("Do not @ other participants");
+    expect(body).toContain("do not emit hidden control blocks unless AllowedActions explicitly says so");
+  });
 });
 
 describe("bot cache cleanup", () => {
@@ -242,6 +309,53 @@ describe("bot cache cleanup", () => {
       senderNameCache: 1,
       permissionErrorNotifiedAt: 1,
     });
+  });
+});
+
+describe("runCollaborationDispatchWithRetry", () => {
+  it("retries session lock errors and eventually succeeds", async () => {
+    const run = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(new Error("session file locked (timeout 10000ms): pid=1 /tmp/x.lock"))
+      .mockResolvedValueOnce("ok");
+    const sleep = vi.fn(async () => {});
+    const log = vi.fn();
+
+    await expect(
+      runCollaborationDispatchWithRetry({
+        run,
+        sleep,
+        log,
+        retryDelaysMs: [1],
+      }),
+    ).resolves.toBe("ok");
+
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("collaboration dispatch retry after session lock"),
+    );
+  });
+
+  it("does not retry non-lock errors", async () => {
+    const run = vi.fn<() => Promise<string>>().mockRejectedValueOnce(new Error("boom"));
+    const sleep = vi.fn(async () => {});
+
+    await expect(
+      runCollaborationDispatchWithRetry({
+        run,
+        sleep,
+        retryDelaysMs: [1, 2],
+      }),
+    ).rejects.toThrow("boom");
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("classifies session file lock errors by message", () => {
+    expect(isSessionFileLockError(new Error("session file locked (timeout 10000ms): pid=1 x.lock"))).toBe(true);
+    expect(isSessionFileLockError(new Error("boom"))).toBe(false);
   });
 });
 
@@ -945,6 +1059,133 @@ describe("handleFeishuMessage command authorization", () => {
         }),
       }),
     );
+  });
+
+  it("fans out coordinate specialist turns in parallel after the coordinator reply", async () => {
+    mockCreateFeishuReplyDispatcher.mockImplementation((params) => ({
+      dispatcher: {
+        markComplete: vi.fn(),
+        waitForIdle: vi.fn(async () => {}),
+      },
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      _params: params,
+    }));
+    botOpenIds.set("main", "ou_main");
+    botOpenIds.set("flink-sre", "ou_flink");
+    botOpenIds.set("starrocks-sre", "ou_starrocks");
+    botNames.set("main", "首席大管家");
+    botNames.set("flink-sre", "Flink-SRE");
+    botNames.set("starrocks-sre", "Starrocks-SRE");
+
+    mockDispatchReplyFromConfig.mockResolvedValue({ queuedFinal: false, counts: { final: 1 } });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          enabled: true,
+          defaultAccount: "main",
+          accounts: {
+            main: {
+              enabled: true,
+              appId: "app_main",
+              appSecret: "secret_main",
+              groupPolicy: "open",
+              requireMention: false,
+              renderMode: "raw",
+              streaming: false,
+            },
+            "flink-sre": {
+              enabled: true,
+              appId: "app_flink",
+              appSecret: "secret_flink",
+              groupPolicy: "open",
+              requireMention: true,
+              renderMode: "raw",
+              streaming: false,
+            },
+            "starrocks-sre": {
+              enabled: true,
+              appId: "app_starrocks",
+              appSecret: "secret_starrocks",
+              groupPolicy: "open",
+              requireMention: true,
+              renderMode: "raw",
+              streaming: false,
+            },
+          },
+        },
+      },
+      agents: {
+        list: [{ id: "main" }, { id: "flink-sre" }, { id: "starrocks-sre" }],
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-user",
+        },
+      },
+      message: {
+        message_id: "msg-coordinate-fanout",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({
+          text: '<at user_id="ou_main">首席大管家</at> <at user_id="ou_flink">Flink-SRE</at> <at user_id="ou_starrocks">Starrocks-SRE</at> 帮我安排并汇总这次排查',
+        }),
+        mentions: [
+          { key: "@_user_1", name: "首席大管家", id: { open_id: "ou_main" } },
+          { key: "@_user_2", name: "Flink-SRE", id: { open_id: "ou_flink" } },
+          { key: "@_user_3", name: "Starrocks-SRE", id: { open_id: "ou_starrocks" } },
+        ],
+      },
+    };
+
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "main",
+      channel: "feishu",
+      accountId: "main",
+      sessionKey: "agent:main:feishu:group:oc-group",
+      mainSessionKey: "agent:main:main",
+      matchedBy: "explicit",
+    });
+
+    await handleFeishuMessage({
+      cfg,
+      event,
+      accountId: "main",
+      botOpenId: "ou_main",
+      botName: "首席大管家",
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(3);
+
+    const specialistCalls = mockDispatchReplyFromConfig.mock.calls
+      .slice(1)
+      .map(([params]) => params.ctx)
+      .sort((a, b) => String(a.AccountId).localeCompare(String(b.AccountId)));
+
+    expect(specialistCalls).toEqual([
+      expect.objectContaining({
+        AccountId: "flink-sre",
+        MessageSid: expect.stringContaining("::coordinate::"),
+        CollaborationMode: "coordinate",
+        CollaborationPhase: "active_collab",
+        CollaborationCurrentOwner: "main",
+        CollaborationIsCurrentOwner: false,
+      }),
+      expect.objectContaining({
+        AccountId: "starrocks-sre",
+        MessageSid: expect.stringContaining("::coordinate::"),
+        CollaborationMode: "coordinate",
+        CollaborationPhase: "active_collab",
+        CollaborationCurrentOwner: "main",
+        CollaborationIsCurrentOwner: false,
+      }),
+    ]);
   });
 
   it("injects hard no-routing instructions for peer collaboration owners", async () => {
