@@ -5,7 +5,9 @@ import {
   clearCollaborationStateForTesting,
   ensureCollaborationState,
   getCollaborationStateForTesting,
+  getCollaborationStateStatsForTesting,
   parseCollaborationControlBlocks,
+  sweepCollaborationStatesForTesting,
 } from "./collaboration.js";
 
 describe("collaboration state", () => {
@@ -567,5 +569,45 @@ describe("collaboration state", () => {
       targetAgentId: "coder",
       status: "awaiting_accept",
     });
+  });
+
+  it("lazily sweeps completed collaboration states", () => {
+    const state = ensureCollaborationState({
+      chatId: "oc_group_terminal",
+      messageId: "msg_terminal",
+      mode: "coordinate",
+      participants: ["main", "flink-sre"],
+    });
+    applyCollaborationActions([
+      {
+        action: "agent_handoff_complete",
+        taskId: state.taskId,
+        agentId: "main",
+      },
+    ]);
+
+    expect(getCollaborationStateForTesting(state.taskId)?.phase).toBe("completed");
+    expect(getCollaborationStateStatsForTesting().byTaskId).toBe(1);
+
+    sweepCollaborationStatesForTesting(Date.now() + 11 * 60 * 1000);
+
+    expect(getCollaborationStateForTesting(state.taskId)).toBeUndefined();
+    expect(getCollaborationStateStatsForTesting()).toEqual({ byKey: 0, byTaskId: 0 });
+  });
+
+  it("lazily sweeps stale non-terminal collaboration states", () => {
+    const state = ensureCollaborationState({
+      chatId: "oc_group_stale",
+      messageId: "msg_stale",
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre"],
+    });
+
+    expect(getCollaborationStateForTesting(state.taskId)?.phase).toBe("initial_assessment");
+
+    sweepCollaborationStatesForTesting(Date.now() + 25 * 60 * 60 * 1000);
+
+    expect(getCollaborationStateForTesting(state.taskId)).toBeUndefined();
+    expect(getCollaborationStateStatsForTesting()).toEqual({ byKey: 0, byTaskId: 0 });
   });
 });

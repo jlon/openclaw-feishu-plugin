@@ -114,6 +114,22 @@ const senderNameCache = new Map<string, { name: string; expireAt: number }>();
 const permissionErrorNotifiedAt = new Map<string, number>();
 const PERMISSION_ERROR_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
 
+function sweepSenderNameCache(now = Date.now()): void {
+  for (const [key, value] of senderNameCache.entries()) {
+    if (value.expireAt <= now) {
+      senderNameCache.delete(key);
+    }
+  }
+}
+
+function sweepPermissionErrorCache(now = Date.now()): void {
+  for (const [key, value] of permissionErrorNotifiedAt.entries()) {
+    if (now - value > PERMISSION_ERROR_COOLDOWN_MS) {
+      permissionErrorNotifiedAt.delete(key);
+    }
+  }
+}
+
 type SenderNameResult = {
   name?: string;
   permissionError?: PermissionError;
@@ -141,6 +157,7 @@ async function resolveFeishuSenderName(params: {
   const normalizedSenderId = senderId.trim();
   if (!normalizedSenderId) return {};
 
+  sweepSenderNameCache();
   const cached = senderNameCache.get(normalizedSenderId);
   const now = Date.now();
   if (cached && cached.expireAt > now) return { name: cached.name };
@@ -1187,6 +1204,7 @@ export async function handleFeishuMessage(params: {
     if (senderResult.permissionError) {
       const appKey = account.appId ?? "default";
       const now = Date.now();
+      sweepPermissionErrorCache(now);
       const lastNotified = permissionErrorNotifiedAt.get(appKey) ?? 0;
 
       if (now - lastNotified > PERMISSION_ERROR_COOLDOWN_MS) {
@@ -1999,4 +2017,39 @@ export async function handleFeishuMessage(params: {
   } catch (err) {
     error(`feishu[${account.accountId}]: failed to dispatch message: ${String(err)}`);
   }
+}
+
+export function clearBotCachesForTesting(): void {
+  senderNameCache.clear();
+  permissionErrorNotifiedAt.clear();
+}
+
+export function primeBotCachesForTesting(params: {
+  senderEntries?: Array<{ key: string; name: string; expireAt: number }>;
+  permissionEntries?: Array<{ key: string; value: number }>;
+}): void {
+  for (const entry of params.senderEntries ?? []) {
+    senderNameCache.set(entry.key, {
+      name: entry.name,
+      expireAt: entry.expireAt,
+    });
+  }
+  for (const entry of params.permissionEntries ?? []) {
+    permissionErrorNotifiedAt.set(entry.key, entry.value);
+  }
+}
+
+export function sweepBotCachesForTesting(now: number): void {
+  sweepSenderNameCache(now);
+  sweepPermissionErrorCache(now);
+}
+
+export function getBotCacheStatsForTesting(): {
+  senderNameCache: number;
+  permissionErrorNotifiedAt: number;
+} {
+  return {
+    senderNameCache: senderNameCache.size,
+    permissionErrorNotifiedAt: permissionErrorNotifiedAt.size,
+  };
 }

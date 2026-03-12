@@ -11,8 +11,12 @@ import type { FeishuMessageEvent } from "./bot.js";
 import {
   buildBroadcastSessionKey,
   buildFeishuAgentBody,
+  clearBotCachesForTesting,
+  getBotCacheStatsForTesting,
   handleFeishuMessage,
+  primeBotCachesForTesting,
   resolveBroadcastAgents,
+  sweepBotCachesForTesting,
   toMessageResourceType,
 } from "./bot.js";
 import { setFeishuRuntime } from "./runtime.js";
@@ -183,6 +187,38 @@ describe("buildFeishuAgentBody", () => {
     expect(body).toContain(
       "Visible reply should be exactly one short sentence about what you will inspect from your own side.",
     );
+  });
+});
+
+describe("bot cache cleanup", () => {
+  beforeEach(() => {
+    clearBotCachesForTesting();
+  });
+
+  it("sweeps expired sender and permission cache entries", () => {
+    const now = Date.now();
+    primeBotCachesForTesting({
+      senderEntries: [
+        { key: "ou_alive", name: "Alive", expireAt: now + 60_000 },
+        { key: "ou_expired", name: "Expired", expireAt: now - 1 },
+      ],
+      permissionEntries: [
+        { key: "app_alive", value: now - 60_000 },
+        { key: "app_expired", value: now - 10 * 60_000 },
+      ],
+    });
+
+    expect(getBotCacheStatsForTesting()).toEqual({
+      senderNameCache: 2,
+      permissionErrorNotifiedAt: 2,
+    });
+
+    sweepBotCachesForTesting(now);
+
+    expect(getBotCacheStatsForTesting()).toEqual({
+      senderNameCache: 1,
+      permissionErrorNotifiedAt: 1,
+    });
   });
 });
 

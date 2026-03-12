@@ -93,6 +93,7 @@ export type CollaborationState = {
   speakerToken?: string;
   assessments: Record<string, CollaborationAssessment>;
   activeHandoffState?: CollaborationActiveHandoffState;
+  updatedAtMs: number;
 };
 
 export type CollaborationRuntimeContext = {
@@ -109,6 +110,8 @@ export type CollaborationRuntimeContext = {
 
 const collaborationStateByKey = new Map<string, CollaborationState>();
 const collaborationStateByTaskId = new Map<string, CollaborationState>();
+const COLLABORATION_TERMINAL_TTL_MS = 10 * 60 * 1000;
+const COLLABORATION_STALE_TTL_MS = 24 * 60 * 60 * 1000;
 
 const CONTROL_BLOCK_PATTERN = /```openclaw-collab\s*([\s\S]*?)```/gu;
 const CONTROL_ACTION_NAME_PATTERN =
@@ -164,6 +167,7 @@ function maybeAdvanceState(state: CollaborationState): CollaborationState {
     phase: "active_collab" as const,
     currentOwner: nextOwner,
     speakerToken: nextOwner,
+    updatedAtMs: Date.now(),
   };
   collaborationStateByKey.set(state.stateKey, nextState);
   collaborationStateByTaskId.set(state.taskId, nextState);
@@ -171,9 +175,13 @@ function maybeAdvanceState(state: CollaborationState): CollaborationState {
 }
 
 function replaceState(state: CollaborationState): CollaborationState {
-  collaborationStateByKey.set(state.stateKey, state);
-  collaborationStateByTaskId.set(state.taskId, state);
-  return state;
+  const nextState = {
+    ...state,
+    updatedAtMs: Date.now(),
+  };
+  collaborationStateByKey.set(nextState.stateKey, nextState);
+  collaborationStateByTaskId.set(nextState.taskId, nextState);
+  return nextState;
 }
 
 function normalizeParticipants(participants: string[]): string[] {
@@ -188,6 +196,7 @@ export function ensureCollaborationState(params: {
   mode: CollaborationMode;
   participants: string[];
 }): CollaborationState {
+  sweepExpiredCollaborationStates();
   const stateKey = buildCollaborationStateKey(params);
   const normalizedParticipants = normalizeParticipants(params.participants);
   const existing = collaborationStateByKey.get(stateKey);
@@ -196,7 +205,7 @@ export function ensureCollaborationState(params: {
     const nextState =
       mergedParticipants.length === existing.participants.length
         ? existing
-        : { ...existing, participants: mergedParticipants };
+        : { ...existing, participants: mergedParticipants, updatedAtMs: Date.now() };
     collaborationStateByKey.set(stateKey, nextState);
     collaborationStateByTaskId.set(nextState.taskId, nextState);
     return nextState;
@@ -211,10 +220,35 @@ export function ensureCollaborationState(params: {
     currentOwner: params.mode === "coordinate" ? "main" : undefined,
     speakerToken: params.mode === "coordinate" ? "main" : undefined,
     assessments: {},
+    updatedAtMs: Date.now(),
   };
   collaborationStateByKey.set(stateKey, nextState);
   collaborationStateByTaskId.set(taskId, nextState);
   return nextState;
+}
+
+function removeCollaborationState(state: CollaborationState): void {
+  collaborationStateByKey.delete(state.stateKey);
+  collaborationStateByTaskId.delete(state.taskId);
+}
+
+function isTerminalCollaborationPhase(phase: CollaborationPhase): boolean {
+  return phase === "completed";
+}
+
+function isExpiredCollaborationState(state: CollaborationState, now: number): boolean {
+  const ttlMs = isTerminalCollaborationPhase(state.phase)
+    ? COLLABORATION_TERMINAL_TTL_MS
+    : COLLABORATION_STALE_TTL_MS;
+  return now - state.updatedAtMs > ttlMs;
+}
+
+function sweepExpiredCollaborationStates(now = Date.now()): void {
+  for (const state of collaborationStateByTaskId.values()) {
+    if (isExpiredCollaborationState(state, now)) {
+      removeCollaborationState(state);
+    }
+  }
 }
 
 function toAssessAction(value: unknown): CollaborationAssessAction | null {
@@ -411,6 +445,7 @@ export function parseCollaborationControlBlocks(text: string): {
 }
 
 export function applyCollaborationActions(actions: CollaborationControlAction[]): CollaborationState[] {
+  sweepExpiredCollaborationStates();
   const touchedStates: CollaborationState[] = [];
   for (const action of actions) {
     const state = collaborationStateByTaskId.get(action.taskId);
@@ -613,11 +648,23 @@ export function clearCollaborationStateForTesting(): void {
 }
 
 export function getCollaborationState(taskId: string): CollaborationState | undefined {
+  sweepExpiredCollaborationStates();
   return collaborationStateByTaskId.get(taskId);
 }
 
 export function getCollaborationStateForTesting(taskId: string): CollaborationState | undefined {
   return getCollaborationState(taskId);
+}
+
+export function sweepCollaborationStatesForTesting(now: number): void {
+  sweepExpiredCollaborationStates(now);
+}
+
+export function getCollaborationStateStatsForTesting(): { byKey: number; byTaskId: number } {
+  return {
+    byKey: collaborationStateByKey.size,
+    byTaskId: collaborationStateByTaskId.size,
+  };
 }
 
 export function resolveCollaborationStateForMessage(params: {
