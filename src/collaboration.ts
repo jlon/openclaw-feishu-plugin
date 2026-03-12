@@ -510,8 +510,12 @@ export function clearCollaborationStateForTesting(): void {
   collaborationStateByTaskId.clear();
 }
 
-export function getCollaborationStateForTesting(taskId: string): CollaborationState | undefined {
+export function getCollaborationState(taskId: string): CollaborationState | undefined {
   return collaborationStateByTaskId.get(taskId);
+}
+
+export function getCollaborationStateForTesting(taskId: string): CollaborationState | undefined {
+  return getCollaborationState(taskId);
 }
 
 export function resolveCollaborationStateForMessage(params: {

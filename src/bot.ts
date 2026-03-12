@@ -36,6 +36,7 @@ import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, sendMessageFeishu } from "./send.js";
 import {
   buildCollaborationRuntimeContext,
+  getCollaborationState,
   resolveCollaborationStateForMessage,
   type CollaborationRuntimeContext,
 } from "./collaboration.js";
@@ -1478,21 +1479,32 @@ export async function handleFeishuMessage(params: {
       agentAccountId: string,
       wasMentioned: boolean,
       agentIdForBody: string,
+      options?: {
+        collaborationStateOverride?: typeof collaborationState;
+        autoMentionTargetsOverride?: boolean;
+        mentionTargetsOverride?: FeishuMessageContext["mentionTargets"];
+      },
     ) => {
       const normalizedAgentId = normalizeAgentId(agentIdForBody);
-      const collaboration: CollaborationRuntimeContext | undefined = collaborationState
+      const effectiveCollaborationState = options?.collaborationStateOverride ?? collaborationState;
+      const collaboration: CollaborationRuntimeContext | undefined = effectiveCollaborationState
         ? buildCollaborationRuntimeContext({
-            state: collaborationState,
+            state: effectiveCollaborationState,
             agentId: normalizedAgentId,
           })
         : undefined;
-      const ctxForAgent = collaboration ? { ...ctx, collaboration } : ctx;
+      const baseCtx =
+        options?.mentionTargetsOverride === undefined
+          ? ctx
+          : { ...ctx, mentionTargets: options.mentionTargetsOverride };
+      const ctxForAgent = collaboration ? { ...baseCtx, collaboration } : baseCtx;
       const messageBody = buildFeishuAgentBody({
         ctx: ctxForAgent,
         quotedContent,
         permissionErrorForAgent,
         botOpenId,
-        autoMentionTargets: normalizedAgentId !== "main",
+        autoMentionTargets:
+          options?.autoMentionTargetsOverride ?? normalizedAgentId !== "main",
         agentId: normalizedAgentId,
       });
       const envelopeFrom = isGroup ? `${ctx.chatId}:${ctx.senderOpenId}` : ctx.senderOpenId;
@@ -1568,6 +1580,93 @@ export async function handleFeishuMessage(params: {
         CollaborationActiveHandoffTarget: collaboration?.activeHandoff?.targetAgentId,
         CollaborationActiveHandoffStatus: collaboration?.activeHandoff?.status,
         ...mediaPayload,
+      });
+    };
+
+    const resolveHandoffTargetAccountId = (targetAgentId: string): string => {
+      const normalizedTarget = normalizeAgentId(targetAgentId);
+      if (normalizedTarget === normalizeAgentId(route.agentId)) {
+        return route.accountId;
+      }
+      const accountConfig = feishuCfg?.accounts as Record<string, unknown> | undefined;
+      if (accountConfig && typeof accountConfig === "object") {
+        for (const key of Object.keys(accountConfig)) {
+          if (normalizeAgentId(key) === normalizedTarget) {
+            return key;
+          }
+        }
+      }
+      return targetAgentId;
+    };
+
+    const maybeDispatchPendingHandoff = async (params: {
+      sourceAgentId: string;
+      previousHandoffId?: string;
+    }) => {
+      if (!isGroup || !collaborationState) {
+        return;
+      }
+      const latestState = getCollaborationState(collaborationState.taskId);
+      const activeHandoff = latestState?.activeHandoffState;
+      if (
+        !latestState ||
+        latestState.phase !== "awaiting_accept" ||
+        !activeHandoff ||
+        activeHandoff.handoffId === params.previousHandoffId ||
+        activeHandoff.fromAgentId !== normalizeAgentId(params.sourceAgentId)
+      ) {
+        return;
+      }
+      const targetAgentId = activeHandoff.targetAgentId;
+      const targetAccountId = resolveHandoffTargetAccountId(targetAgentId);
+      const targetSessionKey = core.channel.routing.buildAgentSessionKey({
+        agentId: targetAgentId,
+        channel: "feishu",
+        peer: {
+          kind: isGroup ? "group" : "direct",
+          id: peerId,
+        },
+      });
+      const targetCtxPayload = buildCtxPayloadForAgent(
+        targetSessionKey,
+        targetAccountId,
+        true,
+        targetAgentId,
+        {
+          collaborationStateOverride: latestState,
+          autoMentionTargetsOverride: false,
+          mentionTargetsOverride: undefined,
+        },
+      );
+      const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
+        cfg,
+        agentId: targetAgentId,
+        runtime: runtime as RuntimeEnv,
+        chatId: ctx.chatId,
+        replyToMessageId: replyTargetMessageId,
+        skipReplyToInMessages: !isGroup,
+        replyInThread,
+        rootId: ctx.rootId,
+        threadReply,
+        mentionTargets: undefined,
+        accountId: targetAccountId,
+        messageCreateTimeMs,
+      });
+      log(
+        `feishu[${account.accountId}]: collaboration handoff dispatch ${params.sourceAgentId} -> ${targetAgentId} (session=${targetSessionKey})`,
+      );
+      await core.channel.reply.withReplyDispatcher({
+        dispatcher,
+        onSettled: () => {
+          markDispatchIdle();
+        },
+        run: () =>
+          core.channel.reply.dispatchReplyFromConfig({
+            ctx: targetCtxPayload,
+            cfg,
+            dispatcher,
+            replyOptions,
+          }),
       });
     };
 
@@ -1752,6 +1851,7 @@ export async function handleFeishuMessage(params: {
         messageCreateTimeMs,
       });
 
+      const previousHandoffId = collaborationState?.activeHandoffState?.handoffId;
       log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
       const { queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
         dispatcher,
@@ -1778,6 +1878,10 @@ export async function handleFeishuMessage(params: {
       log(
         `feishu[${account.accountId}]: dispatch complete (queuedFinal=${queuedFinal}, replies=${counts.final})`,
       );
+      await maybeDispatchPendingHandoff({
+        sourceAgentId: route.agentId,
+        previousHandoffId,
+      });
     }
   } catch (err) {
     error(`feishu[${account.accountId}]: failed to dispatch message: ${String(err)}`);
