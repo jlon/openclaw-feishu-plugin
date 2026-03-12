@@ -247,6 +247,14 @@ function shouldSkipReplyToForSyntheticInbound(messageId: string | undefined): bo
   );
 }
 
+function shouldUseSyntheticMinimalBody(messageId: string | undefined): boolean {
+  return (
+    process.env.OPENCLAW_FEISHU_SYNTHETIC_MINIMAL_BODY === "1" &&
+    typeof messageId === "string" &&
+    messageId.startsWith("synthetic_")
+  );
+}
+
 function resolveFeishuGroupSession(params: {
   chatId: string;
   senderOpenId: string;
@@ -951,6 +959,10 @@ export function buildFeishuAgentBody(params: {
   const speaker = ctx.senderName ?? ctx.senderOpenId;
   messageBody = `${speaker}: ${messageBody}`;
 
+  if (shouldUseSyntheticMinimalBody(ctx.messageId)) {
+    return `[message_id: ${ctx.messageId}]\n${messageBody}`;
+  }
+
   if (ctx.hasAnyMention) {
     const botIdHint = botOpenId?.trim();
     messageBody +=
@@ -1002,7 +1014,9 @@ export function buildFeishuAgentBody(params: {
     }
     if (collaboration.phase === "initial_assessment" && collaboration.mode === "peer_collab" && agentId) {
       messageBody +=
-        `\n[System: This is the initial assessment stage. Give one short visible reply from your own role only.]` +
+        `\n[System: This is the initial assessment stage.]` +
+        `\n[System: Visible reply should be exactly one short sentence about what you will inspect from your own side.]` +
+        `\n[System: Do not ask the user follow-up questions during initial assessment.]` +
         `\n[System: Do not call sessions_send, sessions_spawn, subagents, or message during initial assessment.]` +
         `\n[System: After the visible reply, append exactly one hidden control block in this format:` +
         `\n\`\`\`openclaw-collab` +
@@ -1567,13 +1581,13 @@ export async function handleFeishuMessage(params: {
         AccountId: agentAccountId,
         ChatType: isGroup ? "group" : "direct",
         GroupSubject: isGroup ? ctx.chatId : undefined,
-        SenderName: ctx.senderName ?? ctx.senderOpenId,
+        SenderName:
+          ctx.senderName && ctx.senderName.trim() !== ctx.senderOpenId ? ctx.senderName : undefined,
         SenderId: ctx.senderOpenId,
         Provider: "feishu" as const,
         Surface: "feishu" as const,
         MessageSid: ctx.messageId,
         ReplyToBody: quotedContent ?? undefined,
-        Timestamp: Date.now(),
         WasMentioned: wasMentioned,
         CommandAuthorized: commandAuthorized,
         OriginatingChannel: "feishu" as const,
@@ -1681,6 +1695,78 @@ export async function handleFeishuMessage(params: {
         run: () =>
           core.channel.reply.dispatchReplyFromConfig({
             ctx: targetCtxPayload,
+            cfg,
+            dispatcher,
+            replyOptions,
+              }),
+      });
+    };
+
+    const maybeDispatchActivatedOwner = async (params: {
+      previousPhase?: string;
+      previousOwner?: string;
+    }) => {
+      if (!isGroup || !collaborationState) {
+        return;
+      }
+      const latestState = getCollaborationState(collaborationState.taskId);
+      if (
+        !latestState ||
+        latestState.mode !== "peer_collab" ||
+        latestState.phase !== "active_collab" ||
+        !latestState.currentOwner ||
+        params.previousPhase !== "initial_assessment" ||
+        (params.previousOwner === latestState.currentOwner &&
+          collaborationState.phase === latestState.phase)
+      ) {
+        return;
+      }
+      const ownerAgentId = latestState.currentOwner;
+      const ownerAccountId = resolveHandoffTargetAccountId(ownerAgentId);
+      const ownerSessionKey = core.channel.routing.buildAgentSessionKey({
+        agentId: ownerAgentId,
+        channel: "feishu",
+        peer: {
+          kind: isGroup ? "group" : "direct",
+          id: peerId,
+        },
+      });
+      const ownerCtxPayload = buildCtxPayloadForAgent(
+        ownerSessionKey,
+        ownerAccountId,
+        true,
+        ownerAgentId,
+        {
+          collaborationStateOverride: latestState,
+          autoMentionTargetsOverride: false,
+          mentionTargetsOverride: undefined,
+        },
+      );
+      const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
+        cfg,
+        agentId: ownerAgentId,
+        runtime: runtime as RuntimeEnv,
+        chatId: ctx.chatId,
+        replyToMessageId: replyTargetMessageId,
+        skipReplyToInMessages: !isGroup,
+        replyInThread,
+        rootId: ctx.rootId,
+        threadReply,
+        mentionTargets: undefined,
+        accountId: ownerAccountId,
+        messageCreateTimeMs,
+      });
+      log(
+        `feishu[${account.accountId}]: collaboration owner kickoff dispatch -> ${ownerAgentId} (session=${ownerSessionKey})`,
+      );
+      await core.channel.reply.withReplyDispatcher({
+        dispatcher,
+        onSettled: () => {
+          markDispatchIdle();
+        },
+        run: () =>
+          core.channel.reply.dispatchReplyFromConfig({
+            ctx: ownerCtxPayload,
             cfg,
             dispatcher,
             replyOptions,
@@ -1873,6 +1959,8 @@ export async function handleFeishuMessage(params: {
       });
 
       const previousHandoffId = collaborationState?.activeHandoffState?.handoffId;
+      const previousCollaborationPhase = collaborationState?.phase;
+      const previousCollaborationOwner = collaborationState?.currentOwner;
       log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
       const { queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
         dispatcher,
@@ -1899,6 +1987,10 @@ export async function handleFeishuMessage(params: {
       log(
         `feishu[${account.accountId}]: dispatch complete (queuedFinal=${queuedFinal}, replies=${counts.final})`,
       );
+      await maybeDispatchActivatedOwner({
+        previousPhase: previousCollaborationPhase,
+        previousOwner: previousCollaborationOwner,
+      });
       await maybeDispatchPendingHandoff({
         sourceAgentId: route.agentId,
         previousHandoffId,
