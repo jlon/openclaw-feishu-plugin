@@ -65,8 +65,39 @@ const parseArgs = (argv: string[]): Args => {
   return parsed;
 };
 
-const loadConfig = async (configPath: string): Promise<ClawdbotConfig> =>
-  JSON.parse(await readFile(configPath, "utf8")) as ClawdbotConfig;
+const hydrateProcessEnvFromConfig = (cfg: ClawdbotConfig): void => {
+  const entries = Object.entries((cfg.env ?? {}) as Record<string, unknown>);
+  for (const [key, value] of entries) {
+    if (typeof value !== "string" || process.env[key]) {
+      continue;
+    }
+    process.env[key] = value;
+  }
+};
+
+const expandConfigEnvPlaceholders = (value: unknown, envMap: Record<string, unknown>): unknown => {
+  if (typeof value === "string") {
+    return value.replace(/\$\{([A-Z0-9_]+)\}/g, (_match, key: string) => {
+      const candidate = process.env[key] ?? envMap[key];
+      return typeof candidate === "string" ? candidate : _match;
+    });
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => expandConfigEnvPlaceholders(item, envMap));
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, entry]) => [key, expandConfigEnvPlaceholders(entry, envMap)]),
+    );
+  }
+  return value;
+};
+
+const loadConfig = async (configPath: string): Promise<ClawdbotConfig> => {
+  const cfg = JSON.parse(await readFile(configPath, "utf8")) as ClawdbotConfig;
+  hydrateProcessEnvFromConfig(cfg);
+  return expandConfigEnvPlaceholders(cfg, (cfg.env ?? {}) as Record<string, unknown>) as ClawdbotConfig;
+};
 
 const prepareSyntheticHarnessConfig = (cfg: ClawdbotConfig): ClawdbotConfig => {
   const cloned = structuredClone(cfg);
