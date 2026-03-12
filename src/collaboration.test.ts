@@ -56,6 +56,34 @@ describe("collaboration state", () => {
     ]);
   });
 
+  it("strips trailing bare collaboration json and parses the action", () => {
+    const parsed = parseCollaborationControlBlocks(
+      `从代码和架构角度，我会审视“灵魂”是否体现为持续的身份认同、价值坚守和自主决策能力。\n\n{"action":"collab_assess","taskId":"task_x","agentId":"coder","ownershipClaim":"owner_candidate","currentFinding":"从工程视角，灵魂更像身份一致性与自主判断能力","nextCheck":"等待另一个 agent 的视角","needsWorker":false}`,
+    );
+    expect(parsed.visibleText).toBe(
+      "从代码和架构角度，我会审视“灵魂”是否体现为持续的身份认同、价值坚守和自主决策能力。",
+    );
+    expect(parsed.actions).toEqual([
+      {
+        action: "collab_assess",
+        taskId: "task_x",
+        agentId: "coder",
+        ownershipClaim: "owner_candidate",
+        currentFinding: "从工程视角，灵魂更像身份一致性与自主判断能力",
+        nextCheck: "等待另一个 agent 的视角",
+        needsWorker: false,
+      },
+    ]);
+  });
+
+  it("strips an incomplete trailing collaboration fence from visible text", () => {
+    const parsed = parseCollaborationControlBlocks(
+      `我先看实时链路。\n\n\`\`\`openclaw-collab\n{"action":"collab_assess","taskId":"task_x","agentId":"flink-sre"`,
+    );
+    expect(parsed.visibleText).toBe("我先看实时链路。");
+    expect(parsed.actions).toEqual([]);
+  });
+
   it("elects owner after all peer_collab assessments arrive", () => {
     const state = ensureCollaborationState({
       chatId: "oc_group_1",

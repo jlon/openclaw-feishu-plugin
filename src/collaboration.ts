@@ -111,6 +111,8 @@ const collaborationStateByKey = new Map<string, CollaborationState>();
 const collaborationStateByTaskId = new Map<string, CollaborationState>();
 
 const CONTROL_BLOCK_PATTERN = /```openclaw-collab\s*([\s\S]*?)```/gu;
+const CONTROL_ACTION_NAME_PATTERN =
+  /"action"\s*:\s*"(collab_assess|agent_handoff|agent_handoff_accept|agent_handoff_reject|agent_handoff_need_info|agent_handoff_cancel|agent_handoff_expire|agent_handoff_superseded|agent_handoff_complete)"/u;
 
 function hashText(input: string): string {
   return crypto.createHash("sha1").update(input).digest("hex").slice(0, 12);
@@ -357,24 +359,51 @@ export function parseCollaborationControlBlocks(text: string): {
   actions: CollaborationControlAction[];
 } {
   const actions: CollaborationControlAction[] = [];
-  const visibleText = text
+  const tryParseKnownAction = (rawPayload: string): CollaborationControlAction | null => {
+    try {
+      const parsed = JSON.parse(rawPayload.trim()) as unknown;
+      return (
+        toAssessAction(parsed) ??
+        toHandoffAction(parsed) ??
+        toHandoffResponseAction(parsed) ??
+        toHandoffResolutionAction(parsed) ??
+        toCompleteAction(parsed)
+      );
+    } catch {
+      return null;
+    }
+  };
+
+  let visibleText = text
     .replace(CONTROL_BLOCK_PATTERN, (_, rawPayload: string) => {
-      try {
-        const parsed = JSON.parse(rawPayload.trim()) as unknown;
-        const action =
-          toAssessAction(parsed) ??
-          toHandoffAction(parsed) ??
-          toHandoffResponseAction(parsed) ??
-          toHandoffResolutionAction(parsed) ??
-          toCompleteAction(parsed);
-        if (action) {
-          actions.push(action);
-        }
-      } catch {}
+      const action = tryParseKnownAction(rawPayload);
+      if (action) {
+        actions.push(action);
+      }
       return "";
-    })
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+    });
+
+  const incompleteFenceIndex = visibleText.indexOf("```openclaw-collab");
+  if (incompleteFenceIndex >= 0) {
+    visibleText = visibleText.slice(0, incompleteFenceIndex);
+  }
+
+  const trimmedRight = visibleText.trimEnd();
+  const trailingJsonStart = Math.max(trimmedRight.lastIndexOf("\n{"), trimmedRight.startsWith("{") ? 0 : -1);
+  if (trailingJsonStart >= 0) {
+    const candidateStart =
+      trailingJsonStart === 0 ? 0 : trailingJsonStart + 1;
+    const candidate = trimmedRight.slice(candidateStart).trim();
+    if (CONTROL_ACTION_NAME_PATTERN.test(candidate)) {
+      const action = tryParseKnownAction(candidate);
+      if (action) {
+        actions.push(action);
+      }
+      visibleText = trimmedRight.slice(0, candidateStart);
+    }
+  }
+
+  visibleText = visibleText.replace(/\n{3,}/g, "\n\n").trim();
   return {
     visibleText,
     actions,
