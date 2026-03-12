@@ -448,6 +448,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
     await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "final" });
+    await options.onIdle?.();
 
     expect(streamingInstances).toHaveLength(1);
     expect(streamingInstances[0].start).toHaveBeenCalledTimes(1);
@@ -479,7 +480,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\npartial answer\n```");
   });
 
-  it("delivers distinct final payloads after streaming close", async () => {
+  it("coalesces multiple streaming finals into the latest visible reply on idle", async () => {
     createFeishuReplyDispatcher({
       cfg: {} as never,
       agentId: "agent",
@@ -490,17 +491,18 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
     await options.deliver({ text: "```md\n完整回复第一段\n```" }, { kind: "final" });
     await options.deliver({ text: "```md\n完整回复第一段 + 第二段\n```" }, { kind: "final" });
+    await options.onIdle?.();
 
-    expect(streamingInstances).toHaveLength(2);
+    expect(streamingInstances).toHaveLength(1);
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
-    expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\n完整回复第一段\n```");
-    expect(streamingInstances[1].close).toHaveBeenCalledTimes(1);
-    expect(streamingInstances[1].close).toHaveBeenCalledWith("```md\n完整回复第一段 + 第二段\n```");
+    expect(streamingInstances[0].close).toHaveBeenCalledWith(
+      "```md\n完整回复第一段 + 第二段\n```",
+    );
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
-  it("skips exact duplicate final text after streaming close", async () => {
+  it("keeps a single streaming card when duplicate finals repeat before idle", async () => {
     createFeishuReplyDispatcher({
       cfg: {} as never,
       agentId: "agent",
@@ -511,12 +513,42 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
     await options.deliver({ text: "```md\n同一条回复\n```" }, { kind: "final" });
     await options.deliver({ text: "```md\n同一条回复\n```" }, { kind: "final" });
+    await options.onIdle?.();
 
     expect(streamingInstances).toHaveLength(1);
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
     expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\n同一条回复\n```");
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("does not surface tool-use preambles as separate streaming replies", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "main",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.deliver({ text: "我先获取群成员列表。" }, { kind: "final" });
+    await options.deliver({ text: "我遇到了权限问题，改用表格收集。" }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("我遇到了权限问题，改用表格收集。");
   });
   it("suppresses duplicate final text while still sending media", async () => {
     const options = setupNonStreamingAutoDispatcher();
@@ -752,6 +784,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       { text: "```ts\nconst x = 1\n```", mediaUrls: ["https://example.com/a.png"] },
       { kind: "final" },
     );
+    await options.onIdle?.();
 
     expect(streamingInstances).toHaveLength(1);
     expect(streamingInstances[0].start).toHaveBeenCalledTimes(1);

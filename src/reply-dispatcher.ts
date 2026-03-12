@@ -176,6 +176,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streaming: FeishuStreamingSession | null = null;
   let streamText = "";
   let lastPartial = "";
+  let pendingFinalText = "";
   const deliveredFinalTexts = new Set<string>();
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
@@ -248,16 +249,23 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
     await partialUpdateQueue;
     if (streaming?.isActive()) {
-      let text = sanitizeVisibleReplyText(streamText, Boolean(mentionTargets?.length));
+      let text = sanitizeVisibleReplyText(
+        pendingFinalText || streamText,
+        Boolean(mentionTargets?.length),
+      );
       if (mentionTargets?.length) {
         text = buildMentionedCardContent(mentionTargets, text);
       }
       await streaming.close(text);
+      if (text.trim()) {
+        deliveredFinalTexts.add(text);
+      }
     }
     streaming = null;
     streamingStartPromise = null;
     streamText = "";
     lastPartial = "";
+    pendingFinalText = "";
   };
 
   const { dispatcher, replyOptions, markDispatchIdle } =
@@ -326,9 +334,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               queueStreamingUpdate(text, { mode: "delta" });
             }
             if (info?.kind === "final") {
-              streamText = mergeStreamingText(streamText, text);
-              await closeStreaming();
-              deliveredFinalTexts.add(text);
+              pendingFinalText = rawText;
+              streamText = text;
             }
             // Send media even when streaming handled the text
             if (hasMedia) {
