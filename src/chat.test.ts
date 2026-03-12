@@ -21,7 +21,7 @@ describe("registerFeishuChatTools", () => {
     });
   });
 
-  it("registers feishu_chat and handles info/members actions", async () => {
+  function resolveFeishuChatTool(context: Record<string, unknown> = {}) {
     const registerTool = vi.fn();
     registerFeishuChatTools({
       config: {
@@ -39,8 +39,16 @@ describe("registerFeishuChatTools", () => {
     } as any);
 
     expect(registerTool).toHaveBeenCalledTimes(1);
-    const tool = registerTool.mock.calls[0]?.[0];
-    expect(tool?.name).toBe("feishu_chat");
+    const tool = registerTool.mock.calls
+      .map((call) => call[0])
+      .map((candidate) => (typeof candidate === "function" ? candidate(context) : candidate))
+      .find((candidate) => candidate.name === "feishu_chat");
+    expect(tool).toBeDefined();
+    return tool as { execute: (callId: string, params: Record<string, unknown>) => Promise<any> };
+  }
+
+  it("registers feishu_chat and handles info/members actions", async () => {
+    const tool = resolveFeishuChatTool();
 
     chatGetMock.mockResolvedValueOnce({
       code: 0,

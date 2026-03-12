@@ -1,6 +1,7 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/feishu";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { registerFeishuBitableTools } from "./bitable.js";
+import { registerFeishuChatTools } from "./chat.js";
 import { registerFeishuDriveTools } from "./drive.js";
 import { registerFeishuPermTools } from "./perm.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
@@ -125,5 +126,15 @@ describe("feishu tool account routing", () => {
 
     expect(createFeishuClientMock.mock.calls[0]?.[0]?.appId).toBe("app-b");
     expect(createFeishuClientMock.mock.calls[1]?.[0]?.appId).toBe("app-a");
+  });
+
+  test("chat tool routes to agentAccountId instead of the first enabled account", async () => {
+    const { api, resolveTool } = createToolFactoryHarness(createConfig({}));
+    registerFeishuChatTools(api);
+
+    const tool = resolveTool("feishu_chat", { agentAccountId: "b" });
+    await tool.execute("call-ctx", { action: "info", chat_id: "oc_1" });
+
+    expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");
   });
 });
