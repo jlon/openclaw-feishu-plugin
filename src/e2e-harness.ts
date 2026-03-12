@@ -1,6 +1,6 @@
 import { listFeishuAccountIds, resolveFeishuAccount } from "./accounts.js";
 import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
-import type { FeishuMessageEvent } from "./bot.js";
+import { extractMentionedBotAccountIds, extractMentionedOpenIds, type FeishuMessageEvent } from "./bot.js";
 import { shouldSkipDispatchForMentionPolicy } from "./monitor.account.js";
 
 export type SyntheticMention = {
@@ -35,15 +35,34 @@ export function filterSyntheticDispatchAccountIds(params: {
   botNameMap?: ReadonlyMap<string, string>;
 }): string[] {
   const { event, candidateAccountIds, botOpenIdMap, botNameMap } = params;
-  return candidateAccountIds.filter(
-    (accountId) =>
-      !shouldSkipDispatchForMentionPolicy({
+  const mentionedBotAccountIds = new Set(
+    extractMentionedBotAccountIds({
+      event,
+      botOpenIdMap,
+      botNameMap,
+    }),
+  );
+  const mainMentioned = mentionedBotAccountIds.has("main");
+  const hasAnyInternalBotMention = mentionedBotAccountIds.size > 0 || extractMentionedOpenIds(event).length > 0;
+  return candidateAccountIds.filter((accountId) => {
+    if (
+      shouldSkipDispatchForMentionPolicy({
         accountId,
         event,
         botOpenIdMap,
         botNameMap,
-      }),
-  );
+      })
+    ) {
+      return false;
+    }
+    if (!hasAnyInternalBotMention) {
+      return accountId === "main";
+    }
+    if (mentionedBotAccountIds.has(accountId)) {
+      return true;
+    }
+    return accountId === "main" && mainMentioned;
+  });
 }
 
 export function buildSyntheticGroupMessageEvent(params: {

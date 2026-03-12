@@ -155,7 +155,66 @@ describe("e2e harness helpers", () => {
       botNameMap: botNames,
     });
 
-    expect(targets).toEqual(["coder", "flink-sre", "starrocks-sre"]);
+    expect(targets).toEqual(["flink-sre", "starrocks-sre"]);
+  });
+
+  it("routes default synthetic group messages only to main", () => {
+    botOpenIds.clear();
+    botNames.clear();
+    botOpenIds.set("main", "ou-main");
+    botOpenIds.set("flink-sre", "ou-flink");
+    botNames.set("main", "首席大管家");
+    botNames.set("flink-sre", "Flink-SRE");
+
+    const event = buildSyntheticGroupMessageEvent({
+      messageId: "msg-e2e-6",
+      groupId: "oc-test-group",
+      senderOpenId: "ou-user",
+      text: "帮我看下今天的延迟情况",
+    });
+
+    const targets = filterSyntheticDispatchAccountIds({
+      event,
+      candidateAccountIds: ["coder", "flink-sre", "main"],
+      botOpenIdMap: botOpenIds,
+      botNameMap: botNames,
+    });
+
+    expect(targets).toEqual(["main"]);
+  });
+
+  it("routes single-specialist synthetic group messages only to the mentioned specialist", () => {
+    botOpenIds.clear();
+    botNames.clear();
+    botOpenIds.set("main", "ou-main");
+    botOpenIds.set("flink-sre", "ou-flink");
+    botOpenIds.set("starrocks-sre", "ou-starrocks");
+    botNames.set("main", "首席大管家");
+    botNames.set("flink-sre", "Flink-SRE");
+    botNames.set("starrocks-sre", "Starrocks-SRE");
+
+    const event = buildSyntheticGroupMessageEvent({
+      messageId: "msg-e2e-7",
+      groupId: "oc-test-group",
+      senderOpenId: "ou-user",
+      text: "一个字描述下john，只回复一个字",
+      mentions: [
+        {
+          accountId: "flink-sre",
+          openId: "ou-flink",
+          name: "Flink-SRE",
+        },
+      ],
+    });
+
+    const targets = filterSyntheticDispatchAccountIds({
+      event,
+      candidateAccountIds: ["coder", "flink-sre", "main", "starrocks-sre"],
+      botOpenIdMap: botOpenIds,
+      botNameMap: botNames,
+    });
+
+    expect(targets).toEqual(["flink-sre"]);
   });
 
   it("resolves enabled configured accounts allowed for the group", () => {
