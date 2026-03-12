@@ -294,6 +294,73 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
   });
 
+  it("strips trailing bare collaboration json from visible replies on final", async () => {
+    const state = ensureCollaborationState({
+      chatId: "oc_chat",
+      messageId: "msg_bare_json",
+      mode: "peer_collab",
+      participants: ["coder", "starrocks-sre"],
+    });
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "coder",
+      runtime: {} as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.deliver(
+      {
+        text:
+          "从代码和架构角度，我会审视“灵魂”是否体现为持续的身份认同、价值坚守和自主决策能力。\n\n" +
+          JSON.stringify({
+            action: "collab_assess",
+            taskId: state.taskId,
+            agentId: "coder",
+            ownershipClaim: "owner_candidate",
+            currentFinding: "从工程师视角，灵魂可理解为系统的身份认同、价值坚守和自主判断能力",
+            nextCheck: "等待 Starrocks-SRE",
+            needsWorker: false,
+          }),
+      },
+      { kind: "final" },
+    );
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "从代码和架构角度，我会审视“灵魂”是否体现为持续的身份认同、价值坚守和自主决策能力。",
+      }),
+    );
+    expect(getCollaborationStateForTesting(state.taskId)?.assessments["coder"]).toEqual(
+      expect.objectContaining({
+        ownershipClaim: "owner_candidate",
+      }),
+    );
+  });
+
+  it("strips incomplete trailing collaboration fences from visible replies on final", async () => {
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "flink-sre",
+      runtime: {} as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.deliver(
+      {
+        text: "我先看实时链路。\n\n```openclaw-collab\n{\"action\":\"collab_assess\",\"taskId\":\"task_x\"",
+      },
+      { kind: "final" },
+    );
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "我先看实时链路。",
+      }),
+    );
+  });
+
   it("strips handoff control blocks from visible replies and updates collaboration owner flow", async () => {
     const state = ensureCollaborationState({
       chatId: "oc_chat",
