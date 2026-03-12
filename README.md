@@ -137,6 +137,28 @@ task_id / owner / handoff / accept / reject / need_info / complete]
 
 ## 典型场景
 
+```mermaid
+flowchart LR
+    S1[场景 1
+共同点名轻量直答] --> S1A[@A @B 一个字描述下 john]
+    S1A --> S1B[A 回一句]
+    S1A --> S1C[B 回一句]
+
+    S2[场景 2
+专业 Agent 协作排查] --> S2A[@A @B 一起看这条链路]
+    S2A --> S2B[进入 peer_collab]
+    S2B --> S2C[初始并行判断]
+    S2C --> S2D[owner 接棒]
+    S2D --> S2E[受控多轮协作]
+
+    S3[场景 3
+main 编排并收口] --> S3A[@main @A @B 帮我安排并汇总]
+    S3A --> S3B[进入 coordinate]
+    S3B --> S3C[main 接原始消息]
+    S3C --> S3D[内部派单协作]
+    S3D --> S3E[main 汇总回复]
+```
+
 ### 场景 1：共同点名，轻量直答
 
 ```text
@@ -242,31 +264,89 @@ task_id / owner / handoff / accept / reject / need_info / complete]
 - `scripts/sync-to-installed-extension.sh`: 同步到本机 OpenClaw 安装目录
 - `docs/`: 中文文档、技术细节和设计文档
 
-## 本地开发
+## 怎么使用这个插件
 
-安装依赖：
+当前这份仓库是增强版飞书插件源码仓库。使用它的最小路径是：
+
+### 1. 准备 OpenClaw 主程序
+
+确保本机已经安装并可运行 OpenClaw。当前这份插件以 `openclaw@2026.3.8` 为目标基线。
+
+### 2. 准备飞书应用
+
+至少需要准备 1 个飞书应用；如果要做多 Agent 群协作，则建议为 `main`、专业 Agent 分别准备独立飞书应用。
+
+### 3. 配置 `channels.feishu`
+
+这份增强版插件继续兼容官方 `channels.feishu` 配置。最小示例：
+
+```json
+{
+  "channels": {
+    "feishu": {
+      "enabled": true,
+      "defaultAccount": "main",
+      "groupPolicy": "allowlist",
+      "groupAllowFrom": ["oc_xxx"],
+      "accounts": {
+        "main": {
+          "appId": "cli_xxx",
+          "appSecret": "xxx",
+          "requireMention": false
+        },
+        "flink-sre": {
+          "appId": "cli_xxx",
+          "appSecret": "xxx",
+          "requireMention": true
+        },
+        "starrocks-sre": {
+          "appId": "cli_xxx",
+          "appSecret": "xxx",
+          "requireMention": true
+        }
+      }
+    }
+  }
+}
+```
+
+### 4. 把插件同步到当前 OpenClaw 运行目录
+
+当前仓库版本的使用方式是：
 
 ```bash
 npm install
-```
-
-运行测试：
-
-```bash
-npm test
-```
-
-同步到本机安装目录：
-
-```bash
 npm run sync:local
+systemctl --user restart openclaw-gateway.service
 ```
 
-运行群协作 synthetic E2E：
+### 5. 验证插件是否生效
 
 ```bash
-npm run e2e:group
+openclaw gateway health
 ```
+
+预期：
+- `Gateway Health OK`
+- `Feishu: ok`
+
+### 6. 开始使用群协作
+
+推荐先验证这 3 类消息：
+
+```text
+@Flink-SRE @Starrocks-SRE 一个字描述下 john
+```
+
+```text
+@Flink-SRE @Starrocks-SRE 你俩一起看下这条链路，先各自说判断，再互相补充
+```
+
+```text
+@首席大管家 @Flink-SRE @Starrocks-SRE 帮我安排并汇总这次排查
+```
+
+如果这 3 类场景都符合预期，说明插件的群协作主线已经接通。
 
 ## 当前运行时
 
