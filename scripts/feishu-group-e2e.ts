@@ -3,12 +3,12 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
-import { buildSyntheticGroupMessageEvent, resolveSyntheticDeliveryAccountIds } from "../src/e2e-harness.js";
-import { handleFeishuMessage } from "../src/bot.js";
-import { botNames, botOpenIds } from "../src/monitor.state.js";
-import { probeFeishu } from "../src/probe.js";
-import { setFeishuRuntime } from "../src/runtime.js";
-import { resolveFeishuAccount } from "../src/accounts.js";
+import { buildSyntheticGroupMessageEvent, resolveSyntheticDeliveryAccountIds } from "../src/e2e-harness.ts";
+import { handleFeishuMessage } from "../src/bot.ts";
+import { botNames, botOpenIds } from "../src/monitor.state.ts";
+import { probeFeishu } from "../src/probe.ts";
+import { setFeishuRuntime } from "../src/runtime.ts";
+import { resolveFeishuAccount } from "../src/accounts.ts";
 import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk/feishu";
 
 type Args = {

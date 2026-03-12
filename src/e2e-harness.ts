@@ -30,10 +30,20 @@ export function buildSyntheticGroupMessageEvent(params: {
   mentions?: SyntheticMention[];
 }): FeishuMessageEvent {
   const mentions = params.mentions ?? [];
-  const prefix = mentions
-    .map((mention, index) => `<at user_id="${mention.openId}">@_user_${index + 1}</at>`)
-    .join(" ");
-  const contentText = [prefix, params.text].filter(Boolean).join(" ").trim();
+  let inlineMentionMatched = false;
+  const contentText = mentions.reduce((text, mention, index) => {
+    const pattern = new RegExp(`(?<![\\w])@${mention.name.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}(?![\\w])`, "g");
+    return text.replace(pattern, () => {
+      inlineMentionMatched = true;
+      return `<at user_id="${mention.openId}">@_user_${index + 1}</at>`;
+    });
+  }, params.text);
+  const prefix = inlineMentionMatched
+    ? ""
+    : mentions
+        .map((mention, index) => `<at user_id="${mention.openId}">@_user_${index + 1}</at>`)
+        .join(" ");
+  const finalText = [prefix, contentText].filter(Boolean).join(" ").trim();
   return {
     sender: {
       sender_id: {
@@ -45,7 +55,7 @@ export function buildSyntheticGroupMessageEvent(params: {
       chat_id: params.groupId,
       chat_type: "group",
       message_type: "text",
-      content: JSON.stringify({ text: contentText }),
+      content: JSON.stringify({ text: finalText }),
       mentions: mentions.map((mention, index) => ({
         key: `@_user_${index + 1}`,
         id: { open_id: mention.openId },

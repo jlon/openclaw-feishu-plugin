@@ -984,7 +984,8 @@ export function buildFeishuAgentBody(params: {
     messageBody +=
       `\n\n[System: This group message is a peer collaboration request among multiple bots. ` +
       `Reply only from your own role, give your own judgment or next action, keep it concise, ` +
-      `do not answer on behalf of other bots, and do not expose tool calls or internal routing in visible text.]`;
+      `do not answer on behalf of other bots, do not expose tool calls or internal routing in visible text, ` +
+      `and do not call sessions_send, sessions_spawn, subagents, or message to move the baton.]`;
   } else if (ctx.groupCoAddressMode === "coordinate") {
     messageBody +=
       `\n\n[System: This group message is a coordination request. You are the coordinator for this turn. ` +
@@ -1002,6 +1003,7 @@ export function buildFeishuAgentBody(params: {
     if (collaboration.phase === "initial_assessment" && collaboration.mode === "peer_collab" && agentId) {
       messageBody +=
         `\n[System: This is the initial assessment stage. Give one short visible reply from your own role only.]` +
+        `\n[System: Do not call sessions_send, sessions_spawn, subagents, or message during initial assessment.]` +
         `\n[System: After the visible reply, append exactly one hidden control block in this format:` +
         `\n\`\`\`openclaw-collab` +
         `\n{"action":"collab_assess","taskId":"${collaboration.taskId}","agentId":"${agentId}","ownershipClaim":"owner_candidate","currentFinding":"...","nextCheck":"...","needsWorker":false}` +
@@ -1011,6 +1013,7 @@ export function buildFeishuAgentBody(params: {
       if (collaboration.isCurrentOwner) {
         messageBody +=
           `\n[System: You are the current owner of this collaboration. Drive the next step and keep others in-role.]` +
+          `\n[System: Do not call sessions_send, sessions_spawn, subagents, or message to make another participant speak. Use hidden control blocks only.]` +
           `\n[System: If you need to pass the lead, append exactly one hidden control block with action agent_handoff.]` +
           `\n[System: If your current stage is complete, append exactly one hidden control block with action agent_handoff_complete.]`;
       } else if (collaboration.currentOwner) {
@@ -1025,11 +1028,13 @@ export function buildFeishuAgentBody(params: {
           `\n[System: Known time window: ${activeHandoff.timeWindow}.]` +
           `\n[System: Current finding: ${activeHandoff.currentFinding}.]` +
           `\n[System: Unresolved question: ${activeHandoff.unresolvedQuestion}.]` +
+          `\n[System: Do not call sessions_send, sessions_spawn, subagents, or message here. Accept, reject, or ask for missing information using the hidden control block only.]` +
           `\n[System: Reply briefly, then append exactly one hidden control block with action agent_handoff_accept, agent_handoff_reject, or agent_handoff_need_info using handoffId ${activeHandoff.handoffId}.]`;
       } else if (collaboration.isCurrentOwner) {
         messageBody +=
           `\n[System: Handoff ${activeHandoff.handoffId} is pending acceptance by ${activeHandoff.targetAgentId}.]` +
-          `\n[System: You still own this task. Wait, cancel the handoff, or issue a replacement agent_handoff only if the target is wrong or no longer appropriate.]`;
+          `\n[System: You still own this task. Wait, cancel the handoff, or issue a replacement agent_handoff only if the target is wrong or no longer appropriate.]` +
+          `\n[System: Do not call sessions_send, sessions_spawn, subagents, or message while this handoff is pending.]`;
       } else if (collaboration.currentOwner) {
         messageBody +=
           `\n[System: Handoff ${activeHandoff.handoffId} is pending acceptance by ${activeHandoff.targetAgentId}. Do not create another handoff until it resolves.]`;
@@ -1039,7 +1044,8 @@ export function buildFeishuAgentBody(params: {
         `\n[System: The current handoff is blocked waiting for more information from ${collaboration.activeHandoff.targetAgentId}.]`;
       if (collaboration.isCurrentOwner) {
         messageBody +=
-          `\n[System: You still own this task. Provide the missing context, then either continue yourself or issue a new hidden agent_handoff control block.]`;
+          `\n[System: You still own this task. Provide the missing context, then either continue yourself or issue a new hidden agent_handoff control block.]` +
+          `\n[System: Do not call sessions_send, sessions_spawn, subagents, or message while the handoff is blocked.]`;
       }
     } else if (collaboration.phase === "completed") {
       messageBody += `\n[System: This collaboration stage is completed. Do not reopen it unless the user adds new facts.]`;

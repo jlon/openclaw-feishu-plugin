@@ -272,6 +272,7 @@ describe("group collaboration matrix", () => {
     expect(body).toContain("peer collaboration request");
     expect(body).toContain("Reply only from your own role");
     expect(body).toContain("do not expose tool calls or internal routing");
+    expect(body).toContain("Do not call sessions_send, sessions_spawn, subagents, or message");
     expect(body).toContain("Collaboration task task_x");
     expect(body).toContain('"action":"collab_assess"');
   });
@@ -313,6 +314,7 @@ describe("group collaboration matrix", () => {
     expect(body).toContain("AllowedActions=agent_handoff_accept,agent_handoff_reject,agent_handoff_need_info");
     expect(body).toContain("is handing this task to you");
     expect(body).toContain("handoffId handoff_1");
+    expect(body).toContain("Do not call sessions_send, sessions_spawn, subagents, or message");
   });
 
   it("13. DM mention-forward still works", () => {

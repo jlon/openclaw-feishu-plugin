@@ -469,6 +469,36 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("injects hard no-routing instructions for peer collaboration owners", async () => {
+    const body = buildFeishuAgentBody({
+      ctx: {
+        content: "user: @Flink-SRE @Starrocks-SRE 先各自判断，再互相补充",
+        senderName: "user",
+        senderOpenId: "ou_sender",
+        messageId: "msg-owner",
+        hasAnyMention: true,
+        groupCoAddressMode: "peer_collab",
+        collaboration: {
+          taskId: "task_owner",
+          mode: "peer_collab",
+          phase: "active_collab",
+          participants: ["flink-sre", "starrocks-sre"],
+          currentOwner: "flink-sre",
+          speakerToken: "flink-sre",
+          isCurrentOwner: true,
+          allowedActions: ["agent_handoff", "agent_handoff_complete"],
+        },
+      },
+      botOpenId: "ou_flink",
+      autoMentionTargets: false,
+      agentId: "flink-sre",
+    });
+
+    expect(body).toContain("You are the current owner of this collaboration.");
+    expect(body).toContain("Do not call sessions_send, sessions_spawn, subagents, or message");
+    expect(body).toContain("append exactly one hidden control block with action agent_handoff");
+  });
+
   it("uses authorizer resolution instead of hardcoded CommandAuthorized=true", async () => {
     const cfg: ClawdbotConfig = {
       commands: { useAccessGroups: true },
