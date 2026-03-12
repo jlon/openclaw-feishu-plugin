@@ -239,6 +239,14 @@ type ResolvedFeishuGroupSession = {
   threadReply: boolean;
 };
 
+function shouldSkipReplyToForSyntheticInbound(messageId: string | undefined): boolean {
+  return (
+    process.env.OPENCLAW_FEISHU_SYNTHETIC_NO_REPLY_TO === "1" &&
+    typeof messageId === "string" &&
+    messageId.startsWith("synthetic_")
+  );
+}
+
 function resolveFeishuGroupSession(params: {
   chatId: string;
   senderOpenId: string;
@@ -1693,8 +1701,11 @@ export async function handleFeishuMessage(params: {
     const configReplyInThread =
       isGroup &&
       (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled";
-    const replyTargetMessageId =
-      isTopicSession || configReplyInThread ? (ctx.rootId ?? ctx.messageId) : ctx.messageId;
+    const replyTargetMessageId = shouldSkipReplyToForSyntheticInbound(ctx.messageId)
+      ? undefined
+      : isTopicSession || configReplyInThread
+        ? (ctx.rootId ?? ctx.messageId)
+        : ctx.messageId;
     const threadReply = isGroup ? (groupSession?.threadReply ?? false) : false;
 
     if (broadcastAgents) {

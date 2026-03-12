@@ -256,6 +256,68 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockEnqueueSystemEvent).not.toHaveBeenCalled();
   });
 
+  it("skips reply-to for synthetic inbound when synthetic no-reply mode is enabled", async () => {
+    const previous = process.env.OPENCLAW_FEISHU_SYNTHETIC_NO_REPLY_TO;
+    process.env.OPENCLAW_FEISHU_SYNTHETIC_NO_REPLY_TO = "1";
+    try {
+      const cfg: ClawdbotConfig = {
+        channels: {
+          feishu: {
+            groups: {
+              "oc-group": {
+                requireMention: true,
+              },
+            },
+          },
+        },
+      } as ClawdbotConfig;
+
+      const event: FeishuMessageEvent = {
+        sender: {
+          sender_id: {
+            open_id: "ou-user",
+          },
+        },
+        message: {
+          message_id: "synthetic_test_message",
+          chat_id: "oc-group",
+          chat_type: "group",
+          message_type: "text",
+          content: JSON.stringify({
+            text: '<at user_id="bot-open-id">@_user_1</at> synthetic test',
+          }),
+          mentions: [
+            {
+              key: "@_user_1",
+              id: { open_id: "bot-open-id" },
+              name: "Bot",
+              tenant_key: "",
+            },
+          ],
+        },
+      };
+
+      await handleFeishuMessage({
+        cfg,
+        event,
+        botOpenId: "bot-open-id",
+        runtime: createRuntimeEnv(),
+      });
+
+      expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+        expect.objectContaining({
+          replyToMessageId: undefined,
+        }),
+      );
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_FEISHU_SYNTHETIC_NO_REPLY_TO;
+      } else {
+        process.env.OPENCLAW_FEISHU_SYNTHETIC_NO_REPLY_TO = previous;
+      }
+    }
+  });
+
   it("dispatches a visible handoff turn to the target agent after source owner hands off", async () => {
     mockResolveAgentRoute.mockReturnValue({
       agentId: "flink-sre",

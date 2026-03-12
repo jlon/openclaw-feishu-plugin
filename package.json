@@ -6,7 +6,8 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "sync:local": "bash scripts/sync-to-installed-extension.sh"
+    "sync:local": "bash scripts/sync-to-installed-extension.sh",
+    "e2e:group": "tsx scripts/feishu-group-e2e.ts"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.59.0",
@@ -19,6 +20,7 @@
   },
   "devDependencies": {
     "openclaw": "^2026.3.8",
+    "tsx": "^4.21.0",
     "vitest": "^4.0.18"
   },
   "openclaw": {
