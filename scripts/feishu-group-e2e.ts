@@ -3,7 +3,11 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
-import { buildSyntheticGroupMessageEvent, resolveSyntheticDeliveryAccountIds } from "../src/e2e-harness.ts";
+import {
+  buildSyntheticGroupMessageEvent,
+  filterSyntheticDispatchAccountIds,
+  resolveSyntheticDeliveryAccountIds,
+} from "../src/e2e-harness.ts";
 import { handleFeishuMessage } from "../src/bot.ts";
 import { botNames, botOpenIds } from "../src/monitor.state.ts";
 import { probeFeishu } from "../src/probe.ts";
@@ -198,12 +202,19 @@ const main = async () => {
     text: args.text,
     mentions,
   });
+  const filteredDeliverAccounts = filterSyntheticDispatchAccountIds({
+    event,
+    candidateAccountIds: deliverAccounts,
+    botOpenIdMap: botOpenIds,
+    botNameMap: botNames,
+  });
   if (args.dryRun) {
     console.log(
       JSON.stringify(
         {
           messageId,
           deliverAccounts,
+          filteredDeliverAccounts,
           mentions,
           event,
         },
@@ -220,13 +231,14 @@ const main = async () => {
         groupId: args.groupId,
         senderOpenId: args.senderOpenId,
         deliverAccounts,
+        filteredDeliverAccounts,
         mentions: mentions.map(({ accountId, name, openId }) => ({ accountId, name, openId })),
       },
       null,
       2,
     ),
   );
-  for (const accountId of deliverAccounts) {
+  for (const accountId of filteredDeliverAccounts) {
     const identity = identities.get(accountId);
     console.log(`[e2e] dispatch ${messageId} -> ${accountId}`);
     await handleFeishuMessage({

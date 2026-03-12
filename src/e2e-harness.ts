@@ -1,12 +1,18 @@
 import { listFeishuAccountIds, resolveFeishuAccount } from "./accounts.js";
 import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import type { FeishuMessageEvent } from "./bot.js";
+import { shouldSkipDispatchForMentionPolicy } from "./monitor.account.js";
 
 export type SyntheticMention = {
   accountId: string;
   openId: string;
   name: string;
 };
+
+const escapeRegExp = (input: string): string => input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const uniqueMentionAliases = (mention: SyntheticMention): string[] =>
+  [...new Set([mention.name, mention.accountId].map((value) => value.trim()).filter(Boolean))];
 
 export function resolveSyntheticDeliveryAccountIds(
   cfg: ClawdbotConfig,
@@ -22,6 +28,24 @@ export function resolveSyntheticDeliveryAccountIds(
   });
 }
 
+export function filterSyntheticDispatchAccountIds(params: {
+  event: FeishuMessageEvent;
+  candidateAccountIds: string[];
+  botOpenIdMap: ReadonlyMap<string, string>;
+  botNameMap?: ReadonlyMap<string, string>;
+}): string[] {
+  const { event, candidateAccountIds, botOpenIdMap, botNameMap } = params;
+  return candidateAccountIds.filter(
+    (accountId) =>
+      !shouldSkipDispatchForMentionPolicy({
+        accountId,
+        event,
+        botOpenIdMap,
+        botNameMap,
+      }),
+  );
+}
+
 export function buildSyntheticGroupMessageEvent(params: {
   messageId: string;
   groupId: string;
@@ -32,16 +56,19 @@ export function buildSyntheticGroupMessageEvent(params: {
   const mentions = params.mentions ?? [];
   let inlineMentionMatched = false;
   const contentText = mentions.reduce((text, mention, index) => {
-    const pattern = new RegExp(`(?<![\\w])@${mention.name.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}(?![\\w])`, "g");
-    return text.replace(pattern, () => {
-      inlineMentionMatched = true;
-      return `<at user_id="${mention.openId}">@_user_${index + 1}</at>`;
-    });
+    const placeholder = `@_user_${index + 1}`;
+    return uniqueMentionAliases(mention).reduce((current, alias) => {
+      const pattern = new RegExp(`(^|[\\s(（\\[【])@${escapeRegExp(alias)}(?=$|[\\s)）\\]】,，.。!?！？:：;；])`, "giu");
+      return current.replace(pattern, (_match, prefix) => {
+        inlineMentionMatched = true;
+        return `${prefix}${placeholder}`;
+      });
+    }, text);
   }, params.text);
   const prefix = inlineMentionMatched
     ? ""
     : mentions
-        .map((mention, index) => `<at user_id="${mention.openId}">@_user_${index + 1}</at>`)
+        .map((_mention, index) => `@_user_${index + 1}`)
         .join(" ");
   const finalText = [prefix, contentText].filter(Boolean).join(" ").trim();
   return {
