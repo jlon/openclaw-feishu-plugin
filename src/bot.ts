@@ -1008,8 +1008,12 @@ export function buildFeishuAgentBody(params: {
   if (ctx.groupCoAddressMode === "direct_reply") {
     messageBody +=
       `\n\n[System: This group message is co-addressed to multiple people or bots. ` +
-      `Reply only for yourself. Do not delegate, do not call sessions_send or sessions_spawn, ` +
-      `and do not answer on behalf of anyone else.]`;
+      `Reply only for yourself. Assume the other mentioned participants will receive this same turn on their own. ` +
+      `Do not delegate, do not call sessions_send, sessions_spawn, subagents, or message, ` +
+      `and do not answer on behalf of anyone else.]` +
+      `\n[System: Visible reply should be exactly one short sentence.]` +
+      `\n[System: Do not cue another participant, do not say '把话头交给', '轮到谁', '收到', '两位都已回答', '协作完成', or similar follow-up lines.]` +
+      `\n[System: After your one visible sentence, stop. Do not send follow-up confirmation or completion chatter.]`;
   } else if (ctx.groupCoAddressMode === "peer_collab") {
     messageBody +=
       `\n\n[System: This group message is a peer collaboration request among multiple bots. ` +
@@ -1050,6 +1054,9 @@ export function buildFeishuAgentBody(params: {
           `\n[System: Do not call sessions_send, sessions_spawn, subagents, or message to make another participant speak. Use hidden control blocks only.]`;
         if (canHandoff) {
           messageBody +=
+            `\n[System: Visible reply should first add one deeper point from your own role in one or two short sentences.]` +
+            `\n[System: If you hand off, explicitly cue the next participant in plain words in the visible reply before the hidden control block.]` +
+            `\n[System: After the visible baton cue, stop. Do not add extra '收到' or '等待对方' style follow-up lines.]` +
             `\n[System: If you need to pass the lead, append exactly one hidden control block in this format:` +
             `\n\`\`\`openclaw-collab` +
             `\n{"action":"agent_handoff","taskId":"${collaboration.taskId}","agentId":"${agentId}","handoffTo":"target-agent-id","handoffReason":"一句话说明为什么交给对方"}` +
@@ -1083,6 +1090,8 @@ export function buildFeishuAgentBody(params: {
           messageBody += `\n[System: Evidence paths: ${activeHandoff.evidencePaths.join(", ")}.]`;
         }
         messageBody +=
+          `\n[System: Visible reply should explicitly acknowledge the baton and continue from your own role in one or two short sentences before the hidden control block.]` +
+          `\n[System: After the visible acknowledgement and your contribution, stop. Do not append extra completion chatter.]` +
           `\n[System: Do not call sessions_send, sessions_spawn, subagents, or message here. Accept, reject, or ask for missing information using the hidden control block only.]` +
           `\n[System: Reply briefly, then append exactly one hidden control block with action agent_handoff_accept, agent_handoff_reject, or agent_handoff_need_info using handoffId ${activeHandoff.handoffId}.]`;
       } else if (collaboration.isCurrentOwner) {

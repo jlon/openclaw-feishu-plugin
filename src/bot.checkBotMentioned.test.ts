@@ -325,7 +325,7 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     });
     expect(body).toContain("This group message is co-addressed to multiple people or bots.");
     expect(body).toContain("Reply only for yourself.");
-    expect(body).toContain("do not call sessions_send or sessions_spawn");
+    expect(body).toContain("Do not delegate, do not call sessions_send, sessions_spawn, subagents, or message");
   });
 
   it("injects coordination guard for multi-bot coordination prompts", () => {

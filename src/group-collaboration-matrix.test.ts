@@ -244,7 +244,7 @@ describe("group collaboration matrix", () => {
       autoMentionTargets: false,
     });
     expect(body).toContain("Reply only for yourself.");
-    expect(body).toContain("do not call sessions_send or sessions_spawn");
+    expect(body).toContain("Do not delegate, do not call sessions_send, sessions_spawn, subagents, or message");
   });
 
   it("11. peer-collab body tells agents to stay in-role and avoid visible routing", () => {

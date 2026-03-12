@@ -189,6 +189,28 @@ describe("buildFeishuAgentBody", () => {
       "Visible reply should be exactly one short sentence about what you will inspect from your own side.",
     );
   });
+
+  it("forces direct reply turns to stay single-shot and non-delegating", () => {
+    const body = buildFeishuAgentBody({
+      ctx: {
+        content: "user: @Flink-SRE @Starrocks-SRE 你俩各用一句话说下你们处理问题先看什么",
+        senderName: "user",
+        senderOpenId: "ou_sender",
+        messageId: "msg-direct-reply",
+        hasAnyMention: true,
+        groupCoAddressMode: "direct_reply",
+      },
+      botOpenId: "ou_starrocks",
+      autoMentionTargets: false,
+      agentId: "starrocks-sre",
+    });
+
+    expect(body).toContain("Reply only for yourself.");
+    expect(body).toContain("Assume the other mentioned participants will receive this same turn on their own.");
+    expect(body).toContain("Visible reply should be exactly one short sentence.");
+    expect(body).toContain("Do not cue another participant");
+    expect(body).toContain("Do not send follow-up confirmation");
+  });
 });
 
 describe("bot cache cleanup", () => {
@@ -993,6 +1015,91 @@ describe("handleFeishuMessage command authorization", () => {
     expect(body).toContain("Do not defer the conclusion back to the user or ask another participant to finish it for you.");
     expect(body).not.toContain('"action":"agent_handoff"');
     expect(body).not.toContain('"handoffTo":"target-agent-id"');
+  });
+
+  it("adds visible baton guidance for peer collaboration owners who can still hand off", async () => {
+    const body = buildFeishuAgentBody({
+      ctx: {
+        content: "user: @Flink-SRE @Starrocks-SRE 你俩协作讨论什么是灵魂",
+        senderName: "user",
+        senderOpenId: "ou_sender",
+        messageId: "msg-owner-visible-baton",
+        hasAnyMention: true,
+        groupCoAddressMode: "peer_collab",
+        collaboration: {
+          taskId: "task_owner_visible_baton",
+          mode: "peer_collab",
+          phase: "active_collab",
+          participants: ["flink-sre", "starrocks-sre"],
+          currentOwner: "flink-sre",
+          speakerToken: "flink-sre",
+          handoffCount: 0,
+          maxHops: 3,
+          isCurrentOwner: true,
+          allowedActions: ["agent_handoff", "agent_handoff_complete"],
+        },
+      },
+      botOpenId: "ou_flink",
+      autoMentionTargets: false,
+      agentId: "flink-sre",
+    });
+
+    expect(body).toContain(
+      "Visible reply should first add one deeper point from your own role in one or two short sentences.",
+    );
+    expect(body).toContain(
+      "If you hand off, explicitly cue the next participant in plain words in the visible reply before the hidden control block.",
+    );
+    expect(body).toContain("After the visible baton cue, stop.");
+  });
+
+  it("adds visible baton acknowledgement guidance for awaiting_accept targets", async () => {
+    const body = buildFeishuAgentBody({
+      ctx: {
+        content: "user: @Flink-SRE @Starrocks-SRE 你俩协作讨论什么是灵魂",
+        senderName: "user",
+        senderOpenId: "ou_sender",
+        messageId: "msg-awaiting-accept-visible-baton",
+        hasAnyMention: true,
+        groupCoAddressMode: "peer_collab",
+        collaboration: {
+          taskId: "task_awaiting_accept_visible_baton",
+          mode: "peer_collab",
+          phase: "awaiting_accept",
+          participants: ["flink-sre", "starrocks-sre"],
+          currentOwner: "flink-sre",
+          speakerToken: "flink-sre",
+          handoffCount: 0,
+          maxHops: 3,
+          isCurrentOwner: false,
+          allowedActions: [
+            "agent_handoff_accept",
+            "agent_handoff_reject",
+            "agent_handoff_need_info",
+          ],
+          activeHandoff: {
+            handoffId: "handoff_visible_baton",
+            fromAgentId: "flink-sre",
+            targetAgentId: "starrocks-sre",
+            status: "awaiting_accept",
+            timeWindow: "",
+            currentFinding: "请从存储持久化视角补一句",
+            unresolvedQuestion: "请从存储持久化视角补一句",
+            evidencePaths: [],
+            createdAt: Date.now(),
+            lastUpdatedAt: Date.now(),
+          },
+        },
+      },
+      botOpenId: "ou_starrocks",
+      autoMentionTargets: false,
+      agentId: "starrocks-sre",
+    });
+
+    expect(body).toContain(
+      "Visible reply should explicitly acknowledge the baton and continue from your own role in one or two short sentences before the hidden control block.",
+    );
+    expect(body).toContain("After the visible acknowledgement and your contribution, stop.");
   });
 
   it("injects collaboration max hops and handoff count into runtime context", async () => {
