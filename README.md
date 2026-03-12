@@ -36,41 +36,32 @@
 
 ```mermaid
 flowchart TD
-    U[业务 / 值班同学] --> G[飞书群消息]
-    G --> R[群模式判定
-default / direct_reply / peer_collab / coordinate]
+    U["业务 / 值班同学"] --> G["飞书群消息"]
+    G --> R["群模式判定<br/>default / direct_reply / peer_collab / coordinate"]
 
-    R --> D[direct_reply
-共同点名直答]
-    R --> P[peer_collab
-专业 Agent 受控多轮协作]
-    R --> C[coordinate
-main 编排与汇总]
+    R --> D["direct_reply<br/>共同点名直答"]
+    R --> P["peer_collab<br/>专业 Agent 受控多轮协作"]
+    R --> C["coordinate<br/>main 编排与汇总"]
 
-    D --> A1[被点名 Agent 各自回复]
+    D --> A1["被点名 Agent 各自回复"]
 
-    P --> H[内部协作协议
-task_id / owner / handoff / accept / reject / need_info / complete]
-    H --> A2[当前 owner]
-    H --> A3[目标 Agent 接棒]
+    P --> H["内部协作协议<br/>task_id / owner / handoff / accept / reject / need_info / complete"]
+    H --> A2["当前 owner"]
+    H --> A3["目标 Agent 接棒"]
 
-    C --> M[main 接原始群消息]
+    C --> M["main 接原始群消息"]
     M --> H
 
-    A1 --> V[群里可见回复]
+    A1 --> V["群里可见回复"]
     A2 --> V
     A3 --> V
     M --> V
 
-    T[官方已有能力
-消息接入 / 多账号 / 工具 / 基础群仲裁] -.提供底座.-> R
-    X[当前增强能力
-群协作协议层] -.补齐缺失能力.-> H
+    T["官方已有能力<br/>消息接入 / 多账号 / 工具 / 基础群仲裁"] -."提供底座".-> R
+    X["当前增强能力<br/>群协作协议层"] -."补齐缺失能力".-> H
 
-    N[注意
-原生 bot-to-bot @ 只做展示层
-稳定控制面走内部协议]:::note
-    N -.约束.-> H
+    N["注意<br/>原生 bot-to-bot @ 只做展示层<br/>稳定控制面走内部协议"]:::note
+    N -."约束".-> H
 
     classDef note fill:#FFF4CC,stroke:#C98A00,color:#5B4A00;
 ```
@@ -139,24 +130,21 @@ task_id / owner / handoff / accept / reject / need_info / complete]
 
 ```mermaid
 flowchart LR
-    S1[场景 1
-共同点名轻量直答] --> S1A[@A @B 一个字描述下 john]
-    S1A --> S1B[A 回一句]
-    S1A --> S1C[B 回一句]
+    S1["场景 1<br/>共同点名轻量直答"] --> S1A["共同点名：轻量直答"]
+    S1A --> S1B["A 回一句"]
+    S1A --> S1C["B 回一句"]
 
-    S2[场景 2
-专业 Agent 协作排查] --> S2A[@A @B 一起看这条链路]
-    S2A --> S2B[进入 peer_collab]
-    S2B --> S2C[初始并行判断]
-    S2C --> S2D[owner 接棒]
-    S2D --> S2E[受控多轮协作]
+    S2["场景 2<br/>专业 Agent 协作排查"] --> S2A["共同点名：一起看链路"]
+    S2A --> S2B["进入 peer_collab"]
+    S2B --> S2C["初始并行判断"]
+    S2C --> S2D["owner 接棒"]
+    S2D --> S2E["受控多轮协作"]
 
-    S3[场景 3
-main 编排并收口] --> S3A[@main @A @B 帮我安排并汇总]
-    S3A --> S3B[进入 coordinate]
-    S3B --> S3C[main 接原始消息]
-    S3C --> S3D[内部派单协作]
-    S3D --> S3E[main 汇总回复]
+    S3["场景 3<br/>main 编排并收口"] --> S3A["点名 main + 专业 Agent"]
+    S3A --> S3B["进入 coordinate"]
+    S3B --> S3C["main 接原始消息"]
+    S3C --> S3D["内部派单协作"]
+    S3D --> S3E["main 汇总回复"]
 ```
 
 ### 场景 1：共同点名，轻量直答
