@@ -61,11 +61,17 @@ vi.mock("./streaming-card.js", () => ({
 }));
 
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
+import {
+  clearCollaborationStateForTesting,
+  ensureCollaborationState,
+  getCollaborationStateForTesting,
+} from "./collaboration.js";
 
 describe("createFeishuReplyDispatcher streaming behavior", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     streamingInstances.length = 0;
+    clearCollaborationStateForTesting();
     sendMediaFeishuMock.mockResolvedValue(undefined);
 
     resolveFeishuAccountMock.mockReturnValue({
@@ -239,6 +245,52 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
     expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("strips collaboration control blocks from visible replies and updates state on final", async () => {
+    const state = ensureCollaborationState({
+      chatId: "oc_chat",
+      messageId: "msg_1",
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre"],
+    });
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "flink-sre",
+      runtime: {} as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.deliver(
+      {
+        text:
+          "我先看实时链路。\n\n```openclaw-collab\n" +
+          JSON.stringify({
+            action: "collab_assess",
+            taskId: state.taskId,
+            agentId: "flink-sre",
+            ownershipClaim: "owner_candidate",
+            currentFinding: "lag上升",
+            nextCheck: "看checkpoint",
+            needsWorker: false,
+          }) +
+          "\n```",
+      },
+      { kind: "final" },
+    );
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "我先看实时链路。",
+      }),
+    );
+    expect(getCollaborationStateForTesting(state.taskId)?.assessments["flink-sre"]).toEqual(
+      expect.objectContaining({
+        ownershipClaim: "owner_candidate",
+        currentFinding: "lag上升",
+      }),
+    );
   });
 
   it("sets disableBlockStreaming in replyOptions to prevent silent reply drops", async () => {

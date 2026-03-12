@@ -5,6 +5,7 @@ import type {
   FeishuAccountConfigSchema,
   z,
 } from "./config-schema.js";
+import type { CollaborationRuntimeContext } from "./collaboration.js";
 import type { GroupCoAddressMode, MentionTarget } from "./mention.js";
 
 export type FeishuConfig = z.infer<typeof FeishuConfigSchema>;
@@ -54,6 +55,7 @@ export type FeishuMessageContext = {
   /** Mention forward targets (excluding the bot itself) */
   mentionTargets?: MentionTarget[];
   groupCoAddressMode?: GroupCoAddressMode;
+  collaboration?: CollaborationRuntimeContext;
 };
 
 export type FeishuSendResult = {

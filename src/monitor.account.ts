@@ -4,8 +4,9 @@ import type { ClawdbotConfig, RuntimeEnv, HistoryEntry } from "openclaw/plugin-s
 import { resolveFeishuAccount } from "./accounts.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
 import {
+  extractMentionedBotAccountIds,
+  normalizeBotIdentifier,
   extractMentionedOpenIds,
-  extractMentionedBotTokensFromText,
   handleFeishuMessage,
   parseFeishuMessageEvent,
   type FeishuMessageEvent,
@@ -30,46 +31,6 @@ import type { ResolvedFeishuAccount } from "./types.js";
 
 const FEISHU_REACTION_VERIFY_TIMEOUT_MS = 1_500;
 const PRIMARY_FEISHU_ACCOUNT_ID = "main";
-
-function normalizeBotIdentifier(value: string | undefined): string {
-  return (value ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/[\s_-]+/g, "");
-}
-
-function extractMentionedBotAccountIds(params: {
-  event: FeishuMessageEvent;
-  botOpenIdMap: ReadonlyMap<string, string>;
-  botNameMap?: ReadonlyMap<string, string>;
-}): string[] {
-  const { event, botOpenIdMap, botNameMap = botNames } = params;
-  const mentionedOpenIds = extractMentionedOpenIds(event);
-  const mentionedNames = new Set(
-    [
-      ...(event.message.mentions ?? []).map((mention) => normalizeBotIdentifier(mention.name)),
-      ...extractMentionedBotTokensFromText(event),
-    ].filter((name) => Boolean(name)),
-  );
-  const mentionedAccountIds = new Set<string>();
-
-  for (const [accountId, openId] of botOpenIdMap.entries()) {
-    if (openId?.trim() && mentionedOpenIds.includes(openId.trim())) {
-      mentionedAccountIds.add(accountId);
-      continue;
-    }
-    const normalizedAccountId = normalizeBotIdentifier(accountId);
-    const normalizedBotName = normalizeBotIdentifier(botNameMap.get(accountId));
-    if (
-      (normalizedAccountId && mentionedNames.has(normalizedAccountId)) ||
-      (normalizedBotName && mentionedNames.has(normalizedBotName))
-    ) {
-      mentionedAccountIds.add(accountId);
-    }
-  }
-
-  return [...mentionedAccountIds];
-}
 
 export type FeishuReactionCreatedEvent = {
   message_id: string;

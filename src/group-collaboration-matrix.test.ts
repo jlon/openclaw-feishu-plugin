@@ -256,13 +256,23 @@ describe("group collaboration matrix", () => {
         messageId: "msg_1",
         hasAnyMention: true,
         groupCoAddressMode: "peer_collab",
+        collaboration: {
+          taskId: "task_x",
+          mode: "peer_collab",
+          phase: "initial_assessment",
+          participants: ["flink-sre", "starrocks-sre"],
+          isCurrentOwner: false,
+        },
       },
       botOpenId: "ou_flink",
       autoMentionTargets: false,
+      agentId: "flink-sre",
     });
     expect(body).toContain("peer collaboration request");
     expect(body).toContain("Reply only from your own role");
     expect(body).toContain("do not expose tool calls or internal routing");
+    expect(body).toContain("Collaboration task task_x");
+    expect(body).toContain('"action":"collab_assess"');
   });
 
   it("12. DM mention-forward still works", () => {

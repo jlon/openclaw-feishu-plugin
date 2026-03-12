@@ -34,6 +34,11 @@ import { parsePostContent } from "./post.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, sendMessageFeishu } from "./send.js";
+import {
+  buildCollaborationRuntimeContext,
+  resolveCollaborationStateForMessage,
+  type CollaborationRuntimeContext,
+} from "./collaboration.js";
 import { botNames, botOpenIds } from "./monitor.state.js";
 import type { FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } from "./types.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
@@ -473,7 +478,7 @@ export function extractMentionedOpenIds(event: FeishuMessageEvent): string[] {
   return [...mentionedOpenIds];
 }
 
-function normalizeBotIdentifier(value: string | undefined): string {
+export function normalizeBotIdentifier(value: string | undefined): string {
   return (value ?? "")
     .trim()
     .toLowerCase()
@@ -512,6 +517,37 @@ export function extractMentionedBotTokensFromText(event: FeishuMessageEvent): st
     }
   }
   return [...tokens];
+}
+
+export function extractMentionedBotAccountIds(params: {
+  event: FeishuMessageEvent;
+  botOpenIdMap: ReadonlyMap<string, string>;
+  botNameMap?: ReadonlyMap<string, string>;
+}): string[] {
+  const { event, botOpenIdMap, botNameMap = botNames } = params;
+  const mentionedOpenIds = extractMentionedOpenIds(event);
+  const mentionedNames = new Set(
+    [
+      ...(event.message.mentions ?? []).map((mention) => normalizeBotIdentifier(mention.name)),
+      ...extractMentionedBotTokensFromText(event),
+    ].filter((name) => Boolean(name)),
+  );
+  const mentionedAccountIds = new Set<string>();
+  for (const [accountId, openId] of botOpenIdMap.entries()) {
+    if (openId?.trim() && mentionedOpenIds.includes(openId.trim())) {
+      mentionedAccountIds.add(accountId);
+      continue;
+    }
+    const normalizedAccountId = normalizeBotIdentifier(accountId);
+    const normalizedBotName = normalizeBotIdentifier(botNameMap.get(accountId));
+    if (
+      (normalizedAccountId && mentionedNames.has(normalizedAccountId)) ||
+      (normalizedBotName && mentionedNames.has(normalizedBotName))
+    ) {
+      mentionedAccountIds.add(accountId);
+    }
+  }
+  return [...mentionedAccountIds];
 }
 
 function checkBotMentioned(event: FeishuMessageEvent, botOpenId?: string, botName?: string): boolean {
@@ -881,14 +917,21 @@ export function parseFeishuMessageEvent(
 export function buildFeishuAgentBody(params: {
   ctx: Pick<
     FeishuMessageContext,
-    "content" | "senderName" | "senderOpenId" | "mentionTargets" | "messageId" | "hasAnyMention"
+    | "content"
+    | "senderName"
+    | "senderOpenId"
+    | "mentionTargets"
+    | "messageId"
+    | "hasAnyMention"
+    | "collaboration"
   >;
   quotedContent?: string;
   permissionErrorForAgent?: PermissionError;
   botOpenId?: string;
   autoMentionTargets?: boolean;
+  agentId?: string;
 }): string {
-  const { ctx, quotedContent, permissionErrorForAgent, botOpenId } = params;
+  const { ctx, quotedContent, permissionErrorForAgent, botOpenId, agentId } = params;
   const autoMentionTargets = params.autoMentionTargets ?? true;
   let messageBody = ctx.content;
   if (quotedContent) {
@@ -939,6 +982,30 @@ export function buildFeishuAgentBody(params: {
       `Delegate only when needed, and do not speak on behalf of other bots without their result.]`;
   }
 
+  if (ctx.collaboration) {
+    const collaboration = ctx.collaboration;
+    messageBody +=
+      `\n\n[System: Collaboration task ${collaboration.taskId}. ` +
+      `Mode=${collaboration.mode}. Phase=${collaboration.phase}. Participants=${collaboration.participants.join(", ")}.]`;
+    if (collaboration.phase === "initial_assessment" && collaboration.mode === "peer_collab" && agentId) {
+      messageBody +=
+        `\n[System: This is the initial assessment stage. Give one short visible reply from your own role only.]` +
+        `\n[System: After the visible reply, append exactly one hidden control block in this format:` +
+        `\n\`\`\`openclaw-collab` +
+        `\n{"action":"collab_assess","taskId":"${collaboration.taskId}","agentId":"${agentId}","ownershipClaim":"owner_candidate","currentFinding":"...","nextCheck":"...","needsWorker":false}` +
+        `\n\`\`\`` +
+        `\n[System: The hidden control block will be stripped before sending to Feishu.]`;
+    } else if (collaboration.phase === "active_collab") {
+      if (collaboration.isCurrentOwner) {
+        messageBody +=
+          `\n[System: You are the current owner of this collaboration. Drive the next step and keep others in-role.]`;
+      } else if (collaboration.currentOwner) {
+        messageBody +=
+          `\n[System: Current owner is ${collaboration.currentOwner}. Do not act as the main speaker unless the user re-addresses you.]`;
+      }
+    }
+  }
+
   // Keep message_id on its own line so shared message-id hint stripping can parse it reliably.
   messageBody = `[message_id: ${ctx.messageId}]\n${messageBody}`;
 
@@ -986,32 +1053,30 @@ export async function handleFeishuMessage(params: {
   const isGroup = ctx.chatType === "group";
   const isDirect = !isGroup;
   const senderUserId = event.sender.sender_id.user_id?.trim() || undefined;
+  let collaborationState:
+    | ReturnType<typeof resolveCollaborationStateForMessage>
+    | undefined;
   if (isGroup) {
-    const normalizedMainName = (botNames.get("main") ?? "")
-      .trim()
-      .toLowerCase()
-      .replace(/[\s_-]+/g, "");
-    const mentionedBotTokens = extractMentionedBotTokensFromText(event);
-    const mentionedBotCount = new Set([
-      ...extractMentionedOpenIds(event),
-      ...mentionedBotTokens,
-    ]).size;
-    const mainMentioned = Boolean(
-      (event.message.mentions ?? []).some(
-        (mention) =>
-          mention.id.open_id?.trim() === botOpenIds.get("main")?.trim() ||
-          ((mention.name ?? "").trim().toLowerCase().replace(/[\s_-]+/g, "") === normalizedMainName &&
-            normalizedMainName),
-      ) ||
-        (normalizedMainName && mentionedBotTokens.includes(normalizedMainName)),
-    );
+    const mentionedBotAccountIds = extractMentionedBotAccountIds({
+      event,
+      botOpenIdMap: botOpenIds,
+      botNameMap: botNames,
+    });
+    const mainMentioned = mentionedBotAccountIds.includes("main");
     const groupCoAddressMode = classifyGroupCoAddressMode({
       event,
-      mentionedBotCount,
+      mentionedBotCount: mentionedBotAccountIds.length,
       mainMentioned,
     });
     if (groupCoAddressMode !== "none") {
       ctx = { ...ctx, groupCoAddressMode };
+      if (groupCoAddressMode === "peer_collab" || groupCoAddressMode === "coordinate") {
+        collaborationState = resolveCollaborationStateForMessage({
+          event,
+          mode: groupCoAddressMode,
+          participants: mentionedBotAccountIds,
+        });
+      }
     }
   }
 
@@ -1369,47 +1434,7 @@ export async function handleFeishuMessage(params: {
     }
 
     const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
-    const messageBody = buildFeishuAgentBody({
-      ctx,
-      quotedContent,
-      permissionErrorForAgent,
-      botOpenId,
-      autoMentionTargets: normalizeAgentId(route.agentId) !== "main",
-    });
-    const envelopeFrom = isGroup ? `${ctx.chatId}:${ctx.senderOpenId}` : ctx.senderOpenId;
-    if (permissionErrorForAgent) {
-      // Keep the notice in a single dispatch to avoid duplicate replies (#27372).
-      log(`feishu[${account.accountId}]: appending permission error notice to message body`);
-    }
-
-    const body = core.channel.reply.formatAgentEnvelope({
-      channel: "Feishu",
-      from: envelopeFrom,
-      timestamp: new Date(),
-      envelope: envelopeOptions,
-      body: messageBody,
-    });
-
-    let combinedBody = body;
     const historyKey = groupHistoryKey;
-
-    if (isGroup && historyKey && chatHistories) {
-      combinedBody = buildPendingHistoryContextFromMap({
-        historyMap: chatHistories,
-        historyKey,
-        limit: historyLimit,
-        currentMessage: combinedBody,
-        formatEntry: (entry) =>
-          core.channel.reply.formatAgentEnvelope({
-            channel: "Feishu",
-            // Preserve speaker identity in group history as well.
-            from: `${ctx.chatId}:${entry.sender}`,
-            timestamp: entry.timestamp,
-            body: entry.body,
-            envelope: envelopeOptions,
-          }),
-      });
-    }
 
     const inboundHistory =
       isGroup && historyKey && historyLimit > 0 && chatHistories
@@ -1425,8 +1450,53 @@ export async function handleFeishuMessage(params: {
       agentSessionKey: string,
       agentAccountId: string,
       wasMentioned: boolean,
-    ) =>
-      core.channel.reply.finalizeInboundContext({
+      agentIdForBody: string,
+    ) => {
+      const normalizedAgentId = normalizeAgentId(agentIdForBody);
+      const collaboration: CollaborationRuntimeContext | undefined = collaborationState
+        ? buildCollaborationRuntimeContext({
+            state: collaborationState,
+            agentId: normalizedAgentId,
+          })
+        : undefined;
+      const ctxForAgent = collaboration ? { ...ctx, collaboration } : ctx;
+      const messageBody = buildFeishuAgentBody({
+        ctx: ctxForAgent,
+        quotedContent,
+        permissionErrorForAgent,
+        botOpenId,
+        autoMentionTargets: normalizedAgentId !== "main",
+        agentId: normalizedAgentId,
+      });
+      const envelopeFrom = isGroup ? `${ctx.chatId}:${ctx.senderOpenId}` : ctx.senderOpenId;
+      if (permissionErrorForAgent) {
+        log(`feishu[${account.accountId}]: appending permission error notice to message body`);
+      }
+      const body = core.channel.reply.formatAgentEnvelope({
+        channel: "Feishu",
+        from: envelopeFrom,
+        timestamp: new Date(),
+        envelope: envelopeOptions,
+        body: messageBody,
+      });
+      const combinedBody =
+        isGroup && historyKey && chatHistories
+          ? buildPendingHistoryContextFromMap({
+              historyMap: chatHistories,
+              historyKey,
+              limit: historyLimit,
+              currentMessage: body,
+              formatEntry: (entry) =>
+                core.channel.reply.formatAgentEnvelope({
+                  channel: "Feishu",
+                  from: `${ctx.chatId}:${entry.sender}`,
+                  timestamp: entry.timestamp,
+                  body: entry.body,
+                  envelope: envelopeOptions,
+                }),
+            })
+          : body;
+      return core.channel.reply.finalizeInboundContext({
         Body: combinedBody,
         BodyForAgent: messageBody,
         InboundHistory: inboundHistory,
@@ -1452,8 +1522,19 @@ export async function handleFeishuMessage(params: {
         OriginatingChannel: "feishu" as const,
         OriginatingTo: feishuTo,
         GroupSystemPrompt: isGroup ? groupConfig?.systemPrompt?.trim() || undefined : undefined,
+        CollaborationTaskId: collaboration?.taskId,
+        CollaborationMode: collaboration?.mode,
+        CollaborationPhase: collaboration?.phase,
+        CollaborationParticipants:
+          collaboration && collaboration.participants.length > 0
+            ? collaboration.participants.join(",")
+            : undefined,
+        CollaborationCurrentOwner: collaboration?.currentOwner,
+        CollaborationSpeakerToken: collaboration?.speakerToken,
+        CollaborationIsCurrentOwner: collaboration?.isCurrentOwner,
         ...mediaPayload,
       });
+    };
 
     // Parse message create_time (Feishu uses millisecond epoch string).
     const messageCreateTimeMs = event.message.create_time
@@ -1517,6 +1598,7 @@ export async function handleFeishuMessage(params: {
           agentSessionKey,
           route.accountId,
           ctx.mentionedBot && agentId === activeAgentId,
+          agentId,
         );
 
         if (agentId === activeAgentId) {
@@ -1617,6 +1699,7 @@ export async function handleFeishuMessage(params: {
         route.sessionKey,
         route.accountId,
         ctx.mentionedBot,
+        route.agentId,
       );
 
       const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({

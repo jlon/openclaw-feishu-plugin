@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { applyCollaborationActions, parseCollaborationControlBlocks } from "./collaboration.js";
 import { sendMediaFeishu } from "./media.js";
 import type { MentionTarget } from "./mention.js";
 import { buildMentionedCardContent } from "./mention.js";
@@ -49,7 +50,7 @@ function stripRedundantLeadingMentions(text: string, hasMentionTargets: boolean)
 
 function sanitizeVisibleReplyText(text: string, hasMentionTargets: boolean): string {
   return stripRedundantLeadingMentions(
-    stripInternalToolSyntaxLeak(text),
+    stripInternalToolSyntaxLeak(parseCollaborationControlBlocks(text).visibleText),
     hasMentionTargets,
   );
 }
@@ -272,7 +273,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         void typingCallbacks.onReplyStart?.();
       },
       deliver: async (payload: ReplyPayload, info) => {
-        const text = sanitizeVisibleReplyText(payload.text ?? "", Boolean(mentionTargets?.length));
+        const rawText = payload.text ?? "";
+        if (info?.kind === "final") {
+          const { actions } = parseCollaborationControlBlocks(rawText);
+          if (actions.length > 0) {
+            applyCollaborationActions(actions);
+          }
+        }
+        const text = sanitizeVisibleReplyText(rawText, Boolean(mentionTargets?.length));
         const mediaList =
           payload.mediaUrls && payload.mediaUrls.length > 0
             ? payload.mediaUrls
