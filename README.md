@@ -32,6 +32,51 @@
 - 流式回复去重、内部控制块剥离、错误 `@` 清洗
 - 群参与者视图 `feishu_chat(action="participants")`
 
+## 架构图
+
+```mermaid
+flowchart TD
+    U[业务 / 值班同学] --> G[飞书群消息]
+    G --> R[群模式判定
+default / direct_reply / peer_collab / coordinate]
+
+    R --> D[direct_reply
+共同点名直答]
+    R --> P[peer_collab
+专业 Agent 受控多轮协作]
+    R --> C[coordinate
+main 编排与汇总]
+
+    D --> A1[被点名 Agent 各自回复]
+
+    P --> H[内部协作协议
+task_id / owner / handoff / accept / reject / need_info / complete]
+    H --> A2[当前 owner]
+    H --> A3[目标 Agent 接棒]
+
+    C --> M[main 接原始群消息]
+    M --> H
+
+    A1 --> V[群里可见回复]
+    A2 --> V
+    A3 --> V
+    M --> V
+
+    T[官方已有能力
+消息接入 / 多账号 / 工具 / 基础群仲裁] -.提供底座.-> R
+    X[当前增强能力
+群协作协议层] -.补齐缺失能力.-> H
+
+    N[注意
+原生 bot-to-bot @ 只做展示层
+稳定控制面走内部协议]:::note
+    N -.约束.-> H
+
+    classDef note fill:#FFF4CC,stroke:#C98A00,color:#5B4A00;
+```
+
+这张图对应的核心判断只有一句：**官方 stock 插件解决“飞书接入”，当前增强版插件解决“群里多个 Agent 如何稳定协作”。**
+
 ## 解决了哪些真实痛点
 
 ### 痛点 1：每次只能 @ 一个 Agent
