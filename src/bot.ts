@@ -1828,6 +1828,39 @@ export async function handleFeishuMessage(params: {
         return targets.length > 0 ? targets : undefined;
       };
 
+      const buildPeerCollabVisibleMentionTargets = (
+        state: CollaborationState | undefined,
+        speakerAgentId: string,
+      ): MentionTarget[] | undefined => {
+        if (!state || state.mode !== "peer_collab") {
+          return undefined;
+        }
+        const normalizedSpeaker = normalizeAgentId(speakerAgentId);
+        const otherParticipants = state.participants.filter(
+          (participant) => normalizeAgentId(participant) !== normalizedSpeaker,
+        );
+        if (otherParticipants.length === 0) {
+          return undefined;
+        }
+        if (
+          state.protocol === "scripted_peer" &&
+          state.phase === "active_collab" &&
+          typeof state.scriptedTurnIndex === "number" &&
+          typeof state.scriptedTotalTurns === "number" &&
+          state.scriptedTurnIndex + 1 < state.scriptedTotalTurns
+        ) {
+          const currentIndex = state.participants.findIndex(
+            (participant) => normalizeAgentId(participant) === normalizedSpeaker,
+          );
+          if (currentIndex >= 0) {
+            const nextParticipant =
+              state.participants[(currentIndex + 1 + state.participants.length) % state.participants.length];
+            return buildVisibleMentionTargetsForAgents([nextParticipant]);
+          }
+        }
+        return buildVisibleMentionTargetsForAgents(otherParticipants);
+      };
+
     const maybeDispatchPendingHandoff = async (params: {
       sourceAgentId: string;
       previousHandoffId?: string;
@@ -1959,19 +1992,10 @@ export async function handleFeishuMessage(params: {
       }
       const ownerAgentId = latestState.currentOwner;
       const ownerAccountId = resolveHandoffTargetAccountId(ownerAgentId);
-      const nextScriptedOwnerVisibleTargets =
-        latestState.protocol === "scripted_peer" &&
-        latestState.phase === "active_collab" &&
-        typeof latestState.scriptedTurnIndex === "number" &&
-        typeof latestState.scriptedTotalTurns === "number" &&
-        latestState.scriptedTurnIndex + 1 < latestState.scriptedTotalTurns
-          ? buildVisibleMentionTargetsForAgents([
-              latestState.participants[
-                (latestState.participants.indexOf(ownerAgentId) + 1 + latestState.participants.length) %
-                  latestState.participants.length
-              ],
-            ])
-          : undefined;
+      const nextScriptedOwnerVisibleTargets = buildPeerCollabVisibleMentionTargets(
+        latestState,
+        ownerAgentId,
+      );
       const ownerSessionKey = core.channel.routing.buildAgentSessionKey({
         agentId: ownerAgentId,
         channel: "feishu",
@@ -2322,7 +2346,9 @@ export async function handleFeishuMessage(params: {
                 (participant) => normalizeAgentId(participant) !== "main",
               ),
             )
-          : undefined;
+          : collaborationState?.mode === "peer_collab"
+            ? buildPeerCollabVisibleMentionTargets(collaborationState, route.agentId)
+            : undefined;
       const ctxPayload = buildCtxPayloadForAgent(
         route.sessionKey,
         route.accountId,

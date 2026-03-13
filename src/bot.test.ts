@@ -1186,6 +1186,12 @@ describe("handleFeishuMessage command authorization", () => {
         }),
       }),
     );
+    const ownerKickoffParams = mockCreateFeishuReplyDispatcher.mock.calls[2]?.[0] as
+      | { visibleMentionTargets?: Array<{ openId: string; name: string }> }
+      | undefined;
+    expect(ownerKickoffParams?.visibleMentionTargets).toEqual([
+      expect.objectContaining({ openId: "ou_starrocks", name: "Starrocks-SRE" }),
+    ]);
   });
 
   it("auto-advances scripted peer collaboration turns without hidden control blocks", async () => {
@@ -1358,6 +1364,30 @@ describe("handleFeishuMessage command authorization", () => {
         }),
       }),
     );
+    const firstAssessmentParams = mockCreateFeishuReplyDispatcher.mock.calls[0]?.[0] as
+      | { visibleMentionTargets?: Array<{ openId: string; name: string }> }
+      | undefined;
+    const secondAssessmentParams = mockCreateFeishuReplyDispatcher.mock.calls[1]?.[0] as
+      | { visibleMentionTargets?: Array<{ openId: string; name: string }> }
+      | undefined;
+    const firstOwnerParams = mockCreateFeishuReplyDispatcher.mock.calls[2]?.[0] as
+      | { visibleMentionTargets?: Array<{ openId: string; name: string }> }
+      | undefined;
+    const secondOwnerParams = mockCreateFeishuReplyDispatcher.mock.calls[3]?.[0] as
+      | { visibleMentionTargets?: Array<{ openId: string; name: string }> }
+      | undefined;
+    expect(firstAssessmentParams?.visibleMentionTargets).toEqual([
+      expect.objectContaining({ openId: "ou_starrocks", name: "Starrocks-SRE" }),
+    ]);
+    expect(secondAssessmentParams?.visibleMentionTargets).toEqual([
+      expect.objectContaining({ openId: "ou_flink", name: "Flink-SRE" }),
+    ]);
+    expect(firstOwnerParams?.visibleMentionTargets).toEqual([
+      expect.objectContaining({ openId: "ou_starrocks", name: "Starrocks-SRE" }),
+    ]);
+    expect(secondOwnerParams?.visibleMentionTargets).toEqual([
+      expect.objectContaining({ openId: "ou_flink", name: "Flink-SRE" }),
+    ]);
     const taskId = (
       mockDispatchReplyFromConfig.mock.calls[2]?.[0] as { ctx?: Record<string, string> } | undefined
     )?.ctx?.CollaborationTaskId;
