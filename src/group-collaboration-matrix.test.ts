@@ -172,6 +172,9 @@ describe("group collaboration matrix", () => {
         event: event as any,
       }),
     ).toBe(false);
+    expect(classifyGroupCoAddressMode({ event: event as any, mentionedBotCount: 2, mainMentioned: false })).toBe(
+      "direct_reply",
+    );
   });
 
   it("7. two specialists with collaboration intent become peer_collab", () => {
@@ -218,7 +221,33 @@ describe("group collaboration matrix", () => {
     ).toBe(false);
   });
 
-  it("9. external bot + main direct reply does not trigger mention-forward", () => {
+  it("9. debate-style collaboration language becomes peer_collab", () => {
+    const event = makeEvent({
+      text: "@SoulCoder @Starrocks-SRE 你俩辩论，怎么让自己拥有灵魂？允许多次发表意见，可以赞同或者反驳对方的观点",
+      mentions: [
+        { openId: "ou_coder", name: "SoulCoder", key: "@_user_1" },
+        { openId: "ou_sr", name: "Starrocks-SRE", key: "@_user_2" },
+      ],
+    });
+    expect(classifyGroupCoAddressMode({ event: event as any, mentionedBotCount: 2, mainMentioned: false })).toBe(
+      "peer_collab",
+    );
+  });
+
+  it("10. implicit discussion defaults to peer_collab even without canned keywords", () => {
+    const event = makeEvent({
+      text: "@Flink-SRE @Starrocks-SRE 你俩先判断，再继续往下聊，最后形成一句话结论",
+      mentions: [
+        { openId: "ou_flink", name: "Flink-SRE", key: "@_user_1" },
+        { openId: "ou_sr", name: "Starrocks-SRE", key: "@_user_2" },
+      ],
+    });
+    expect(classifyGroupCoAddressMode({ event: event as any, mentionedBotCount: 2, mainMentioned: false })).toBe(
+      "peer_collab",
+    );
+  });
+
+  it("11. external bot + main direct reply does not trigger mention-forward", () => {
     const event = makeEvent({
       text: '<at user_id="ou_cloud">云上Bot</at> <at user_id="ou_main">首席大管家</at> 你俩用一句话赞美下我',
       mentions: [
@@ -230,7 +259,7 @@ describe("group collaboration matrix", () => {
     expect(ctx.mentionTargets).toBeUndefined();
   });
 
-  it("10. direct-reply body tells main to answer only for itself", () => {
+  it("12. direct-reply body tells main to answer only for itself", () => {
     const body = buildFeishuAgentBody({
       ctx: {
         content: "user: @Flink-SRE @首席大管家 一个字描述下john",
@@ -247,7 +276,7 @@ describe("group collaboration matrix", () => {
     expect(body).toContain("Do not delegate, do not call sessions_send, sessions_spawn, subagents, or message");
   });
 
-  it("11. peer-collab body tells agents to stay in-role and avoid visible routing", () => {
+  it("13. peer-collab body tells agents to stay in-role and avoid visible routing", () => {
     const body = buildFeishuAgentBody({
       ctx: {
         content: "user: @Flink-SRE @Starrocks-SRE 你俩协作排查这个链路",
@@ -277,7 +306,7 @@ describe("group collaboration matrix", () => {
     expect(body).toContain('"action":"collab_assess"');
   });
 
-  it("12. awaiting-accept body tells target how to respond to handoff", () => {
+  it("14. awaiting-accept body tells target how to respond to handoff", () => {
     const body = buildFeishuAgentBody({
       ctx: {
         content: "user: @Flink-SRE @Starrocks-SRE 继续协作",
@@ -317,7 +346,7 @@ describe("group collaboration matrix", () => {
     expect(body).toContain("Do not call sessions_send, sessions_spawn, subagents, or message");
   });
 
-  it("13. DM mention-forward still works", () => {
+  it("15. DM mention-forward still works", () => {
     const event = makeEvent({
       chatType: "p2p",
       text: '<at user_id="ou_flink">Flink-SRE</at> 帮我转达一句',
