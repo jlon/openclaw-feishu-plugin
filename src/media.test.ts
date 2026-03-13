@@ -382,7 +382,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(messageResourceGetMock).not.toHaveBeenCalled();
   });
 
-  it("encodes Chinese filenames for file uploads", async () => {
+  it("preserves Chinese filenames when file upload succeeds", async () => {
     await sendMediaFeishu({
       cfg: {} as any,
       to: "user:ou_target",
@@ -391,8 +391,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     const createCall = fileCreateMock.mock.calls[0][0];
-    expect(createCall.data.file_name).not.toBe("测试文档.pdf");
-    expect(createCall.data.file_name).toBe(encodeURIComponent("测试文档") + ".pdf");
+    expect(createCall.data.file_name).toBe("测试文档.pdf");
   });
 
   it("preserves ASCII filenames unchanged for file uploads", async () => {
@@ -407,7 +406,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(createCall.data.file_name).toBe("report-2026.pdf");
   });
 
-  it("encodes special characters (em-dash, full-width brackets) in filenames", async () => {
+  it("preserves special characters in filenames when file upload succeeds", async () => {
     await sendMediaFeishu({
       cfg: {} as any,
       to: "user:ou_target",
@@ -416,9 +415,27 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     const createCall = fileCreateMock.mock.calls[0][0];
-    expect(createCall.data.file_name).toMatch(/\.md$/);
-    expect(createCall.data.file_name).not.toContain("—");
-    expect(createCall.data.file_name).not.toContain("（");
+    expect(createCall.data.file_name).toBe("报告—详情（2026）.md");
+  });
+
+  it("retries with a sanitized filename when raw upload fails on invalid filename characters", async () => {
+    fileCreateMock
+      .mockRejectedValueOnce(Object.assign(new Error("Invalid character in header content"), { code: "ERR_INVALID_CHAR" }))
+      .mockResolvedValueOnce({
+        code: 0,
+        data: { file_key: "file_key_1" },
+      });
+
+    await sendMediaFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("doc"),
+      fileName: "测试文档.pdf",
+    });
+
+    expect(fileCreateMock).toHaveBeenCalledTimes(2);
+    expect(fileCreateMock.mock.calls[0][0].data.file_name).toBe("测试文档.pdf");
+    expect(fileCreateMock.mock.calls[1][0].data.file_name).toBe(encodeURIComponent("测试文档") + ".pdf");
   });
 });
 

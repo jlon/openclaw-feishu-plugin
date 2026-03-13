@@ -236,6 +236,13 @@ export function sanitizeFileNameForUpload(fileName: string): string {
     .replace(/\)/g, "%29");
 }
 
+const isRetryableFileNameUploadError = (error: unknown): boolean => {
+  const code = `${typeof error === "object" && error && "code" in error ? (error as { code?: unknown }).code ?? "" : ""}`.toUpperCase();
+  const message = `${error instanceof Error ? error.message : typeof error === "object" && error && "message" in error ? (error as { message?: unknown }).message ?? "" : error ?? ""}`.toLowerCase();
+  return code === "ERR_INVALID_CHAR"
+    || ["invalid character", "filename", "header content", "multipart", "form-data", "content-disposition"].some((token) => message.includes(token));
+};
+
 /**
  * Upload a file to Feishu and get a file_key for sending.
  * Max file size: 30MB
@@ -259,21 +266,23 @@ export async function uploadFileFeishu(params: {
     httpTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
   });
 
-  // SDK accepts Buffer directly or fs.ReadStream for file paths
-  // Using Readable.from(buffer) causes issues with form-data library
-  // See: https://github.com/larksuite/node-sdk/issues/121
-  const fileData = typeof file === "string" ? fs.createReadStream(file) : file;
-
-  const safeFileName = sanitizeFileNameForUpload(fileName);
-
-  const response = await client.im.file.create({
+  const createFileData = () => typeof file === "string" ? fs.createReadStream(file) : file;
+  const uploadWithFileName = (uploadFileName: string) => client.im.file.create({
     data: {
       file_type: fileType,
-      file_name: safeFileName,
+      file_name: uploadFileName,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK accepts Buffer or ReadStream
-      file: fileData as any,
+      file: createFileData() as any,
       ...(duration !== undefined && { duration }),
     },
+  });
+
+  const safeFileName = sanitizeFileNameForUpload(fileName);
+  const response = await uploadWithFileName(fileName).catch(async (error) => {
+    if (safeFileName === fileName || !isRetryableFileNameUploadError(error)) {
+      throw error;
+    }
+    return await uploadWithFileName(safeFileName);
   });
 
   // SDK v1.30+ returns data directly without code wrapper on success
