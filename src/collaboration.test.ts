@@ -172,7 +172,7 @@ describe("collaboration state", () => {
         currentOwner: "flink-sre",
         speakerToken: "flink-sre",
         scriptedTurnIndex: 0,
-        scriptedTotalTurns: 3,
+        scriptedTotalTurns: 6,
       }),
     );
   });
@@ -201,9 +201,30 @@ describe("collaboration state", () => {
     const afterSecondTurn = advanceScriptedPeerTurn(state.taskId, "starrocks-sre");
     expect(afterSecondTurn).toEqual(
       expect.objectContaining({
+        phase: "active_collab",
+        currentOwner: "flink-sre",
+        speakerToken: "flink-sre",
+        scriptedTurnIndex: 2,
+        lastSpeakerId: "starrocks-sre",
+      }),
+    );
+    const afterThirdTurn = advanceScriptedPeerTurn(state.taskId, "flink-sre");
+    expect(afterThirdTurn).toEqual(
+      expect.objectContaining({
+        phase: "active_collab",
+        currentOwner: "starrocks-sre",
+        speakerToken: "starrocks-sre",
+        scriptedTurnIndex: 3,
+        lastSpeakerId: "flink-sre",
+      }),
+    );
+    const afterFourthTurn = advanceScriptedPeerTurn(state.taskId, "starrocks-sre");
+    expect(afterFourthTurn).toEqual(
+      expect.objectContaining({
         phase: "completed",
         currentOwner: "starrocks-sre",
         speakerToken: undefined,
+        scriptedTurnIndex: 4,
         lastSpeakerId: "starrocks-sre",
       }),
     );

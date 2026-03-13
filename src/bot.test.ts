@@ -247,7 +247,7 @@ describe("buildFeishuAgentBody", () => {
           handoffCount: 1,
           maxHops: 3,
           scriptedTurnIndex: 2,
-          scriptedTotalTurns: 4,
+          scriptedTotalTurns: 8,
           isFinalScriptedTurn: false,
           isCurrentOwner: true,
           allowedActions: [],
@@ -293,7 +293,7 @@ describe("buildFeishuAgentBody", () => {
           handoffCount: 1,
           maxHops: 2,
           scriptedTurnIndex: 2,
-          scriptedTotalTurns: 3,
+          scriptedTotalTurns: 6,
           isFinalScriptedTurn: true,
           isCurrentOwner: true,
           allowedActions: [],
@@ -1339,7 +1339,7 @@ describe("handleFeishuMessage command authorization", () => {
       runtime: createRuntimeEnv(),
     });
 
-    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(4);
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(6);
     expect(mockDispatchReplyFromConfig).toHaveBeenNthCalledWith(
       3,
       expect.objectContaining({
@@ -1364,6 +1364,30 @@ describe("handleFeishuMessage command authorization", () => {
         }),
       }),
     );
+    expect(mockDispatchReplyFromConfig).toHaveBeenNthCalledWith(
+      5,
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          AccountId: "flink-sre",
+          MessageSid: expect.stringContaining("::owner::"),
+          CollaborationPhase: "active_collab",
+          CollaborationCurrentOwner: "flink-sre",
+          CollaborationIsCurrentOwner: true,
+        }),
+      }),
+    );
+    expect(mockDispatchReplyFromConfig).toHaveBeenNthCalledWith(
+      6,
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          AccountId: "starrocks-sre",
+          MessageSid: expect.stringContaining("::owner::"),
+          CollaborationPhase: "active_collab",
+          CollaborationCurrentOwner: "starrocks-sre",
+          CollaborationIsCurrentOwner: true,
+        }),
+      }),
+    );
     const firstAssessmentParams = mockCreateFeishuReplyDispatcher.mock.calls[0]?.[0] as
       | { visibleMentionTargets?: Array<{ openId: string; name: string }> }
       | undefined;
@@ -1374,6 +1398,12 @@ describe("handleFeishuMessage command authorization", () => {
       | { visibleMentionTargets?: Array<{ openId: string; name: string }> }
       | undefined;
     const secondOwnerParams = mockCreateFeishuReplyDispatcher.mock.calls[3]?.[0] as
+      | { visibleMentionTargets?: Array<{ openId: string; name: string }> }
+      | undefined;
+    const thirdOwnerParams = mockCreateFeishuReplyDispatcher.mock.calls[4]?.[0] as
+      | { visibleMentionTargets?: Array<{ openId: string; name: string }> }
+      | undefined;
+    const fourthOwnerParams = mockCreateFeishuReplyDispatcher.mock.calls[5]?.[0] as
       | { visibleMentionTargets?: Array<{ openId: string; name: string }> }
       | undefined;
     expect(firstAssessmentParams?.visibleMentionTargets).toEqual([
@@ -1388,8 +1418,14 @@ describe("handleFeishuMessage command authorization", () => {
     expect(secondOwnerParams?.visibleMentionTargets).toEqual([
       expect.objectContaining({ openId: "ou_flink", name: "Flink-SRE" }),
     ]);
+    expect(thirdOwnerParams?.visibleMentionTargets).toEqual([
+      expect.objectContaining({ openId: "ou_starrocks", name: "Starrocks-SRE" }),
+    ]);
+    expect(fourthOwnerParams?.visibleMentionTargets).toEqual([
+      expect.objectContaining({ openId: "ou_flink", name: "Flink-SRE" }),
+    ]);
     const taskId = (
-      mockDispatchReplyFromConfig.mock.calls[2]?.[0] as { ctx?: Record<string, string> } | undefined
+      mockDispatchReplyFromConfig.mock.calls[4]?.[0] as { ctx?: Record<string, string> } | undefined
     )?.ctx?.CollaborationTaskId;
     expect(taskId).toBeTruthy();
     expect(getCollaborationStateForTesting(taskId!)?.phase).toBe("completed");

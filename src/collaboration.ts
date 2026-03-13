@@ -208,6 +208,14 @@ function replaceState(state: CollaborationState): CollaborationState {
   return nextState;
 }
 
+function computeScriptedPeerTotalTurns(participantCount: number, maxHops: number): number {
+  return Math.max(1, participantCount) * Math.max(1, maxHops + 1);
+}
+
+function computeVisibleTurnRetentionLimit(state: CollaborationState): number {
+  return Math.min(12, Math.max(6, computeScriptedPeerTotalTurns(state.participants.length, state.maxHops)));
+}
+
 function normalizeParticipants(participants: string[]): string[] {
   return [...new Set(participants.map((value) => value.trim()).filter(Boolean))];
 }
@@ -295,7 +303,7 @@ export function markScriptedPeerAssessmentComplete(
     currentOwner: nextState.participants[0],
     speakerToken: nextState.participants[0],
     scriptedTurnIndex: 0,
-    scriptedTotalTurns: Math.max(1, nextState.maxHops + 1),
+    scriptedTotalTurns: computeScriptedPeerTotalTurns(nextState.participants.length, nextState.maxHops),
   });
 }
 
@@ -322,7 +330,7 @@ export function recordCollaborationVisibleTurn(params: {
   if (lastTurn?.agentId === nextTurn.agentId && lastTurn.text === nextTurn.text) {
     return state;
   }
-  const nextTurns = [...previousTurns, nextTurn].slice(-6);
+  const nextTurns = [...previousTurns, nextTurn].slice(-computeVisibleTurnRetentionLimit(state));
   return replaceState({
     ...state,
     recentVisibleTurns: nextTurns,
@@ -343,7 +351,7 @@ export function advanceScriptedPeerTurn(
     return state;
   }
   const nextTurnIndex = (state.scriptedTurnIndex ?? 0) + 1;
-  const totalTurns = state.scriptedTotalTurns ?? Math.max(1, state.maxHops + 1);
+  const totalTurns = state.scriptedTotalTurns ?? computeScriptedPeerTotalTurns(state.participants.length, state.maxHops);
   if (nextTurnIndex >= totalTurns) {
     return replaceState({
       ...state,
