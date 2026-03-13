@@ -39,6 +39,7 @@ import { getMessageFeishu, sendMessageFeishu } from "./send.js";
 import {
   advanceScriptedPeerTurn,
   buildCollaborationRuntimeContext,
+  claimScriptedPeerTurnDispatch,
   claimPendingCoordinateParticipants,
   getCollaborationState,
   markScriptedPeerAssessmentComplete,
@@ -1990,10 +1991,17 @@ export async function handleFeishuMessage(params: {
       ) {
         return;
       }
-      const ownerAgentId = latestState.currentOwner;
+      const claimedState =
+        latestState.protocol === "scripted_peer"
+          ? claimScriptedPeerTurnDispatch(latestState.taskId)
+          : latestState;
+      if (!claimedState) {
+        return;
+      }
+      const ownerAgentId = claimedState.currentOwner!;
       const ownerAccountId = resolveHandoffTargetAccountId(ownerAgentId);
       const nextScriptedOwnerVisibleTargets = buildPeerCollabVisibleMentionTargets(
-        latestState,
+        claimedState,
         ownerAgentId,
       );
       const ownerSessionKey = core.channel.routing.buildAgentSessionKey({
@@ -2010,11 +2018,11 @@ export async function handleFeishuMessage(params: {
         true,
         ownerAgentId,
         {
-          collaborationStateOverride: latestState,
+          collaborationStateOverride: claimedState,
           autoMentionTargetsOverride: false,
           mentionTargetsOverride: undefined,
           visibleMentionTargetsOverride: nextScriptedOwnerVisibleTargets,
-          messageIdOverride: `${ctx.messageId}::owner::${latestState.taskId}::${latestState.phase}::${latestState.handoffCount}::${ownerAgentId}`,
+          messageIdOverride: `${ctx.messageId}::owner::${claimedState.taskId}::${claimedState.phase}::${claimedState.handoffCount}::${ownerAgentId}`,
         },
       );
       const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
@@ -2029,17 +2037,17 @@ export async function handleFeishuMessage(params: {
         threadReply,
         mentionTargets: undefined,
         visibleMentionTargets: nextScriptedOwnerVisibleTargets,
-        collaborationTaskId: latestState.taskId,
+        collaborationTaskId: claimedState.taskId,
         accountId: ownerAccountId,
         messageCreateTimeMs,
       });
       log(
         `feishu[${account.accountId}]: collaboration owner kickoff dispatch -> ${ownerAgentId} (session=${ownerSessionKey})`,
       );
-      const previousHandoffId = latestState.activeHandoffState?.handoffId;
-      const previousPhase = latestState.phase;
-      const previousOwner = latestState.currentOwner;
-      const previousSpeakerToken = latestState.speakerToken;
+      const previousHandoffId = claimedState.activeHandoffState?.handoffId;
+      const previousPhase = claimedState.phase;
+      const previousOwner = claimedState.currentOwner;
+      const previousSpeakerToken = claimedState.speakerToken;
       await runCollaborationDispatchWithRetry({
         log: (message) => log(`feishu[${account.accountId}]: ${message}`),
         run: () =>
@@ -2057,31 +2065,31 @@ export async function handleFeishuMessage(params: {
               }),
           }),
       });
-      if (latestState.protocol === "scripted_peer") {
-        const stateAfterDispatch = getCollaborationState(latestState.taskId);
+      if (claimedState.protocol === "scripted_peer") {
+        const stateAfterDispatch = getCollaborationState(claimedState.taskId);
         const latestActiveHandoffId = stateAfterDispatch?.activeHandoffState?.handoffId;
         const stateUnchanged =
           stateAfterDispatch &&
           stateAfterDispatch.protocol === "scripted_peer" &&
-          stateAfterDispatch.phase === latestState.phase &&
-          stateAfterDispatch.currentOwner === latestState.currentOwner &&
-          stateAfterDispatch.speakerToken === latestState.speakerToken &&
+          stateAfterDispatch.phase === claimedState.phase &&
+          stateAfterDispatch.currentOwner === claimedState.currentOwner &&
+          stateAfterDispatch.speakerToken === claimedState.speakerToken &&
           latestActiveHandoffId === previousHandoffId;
         if (stateUnchanged) {
-          const advancedState = advanceScriptedPeerTurn(latestState.taskId, ownerAgentId);
+          const advancedState = advanceScriptedPeerTurn(claimedState.taskId, ownerAgentId);
           if (!advancedState || advancedState.phase === "completed") {
             return;
           }
           await maybeDispatchCurrentOwnerFollowup({
-            previousPhase: latestState.phase,
-            previousOwner: latestState.currentOwner,
-            previousSpeakerToken: latestState.speakerToken,
+            previousPhase: claimedState.phase,
+            previousOwner: claimedState.currentOwner,
+            previousSpeakerToken: claimedState.speakerToken,
           });
           return;
         }
       }
       await waitForCollaborationStateChange({
-        taskId: latestState.taskId,
+        taskId: claimedState.taskId,
         previousPhase,
         previousOwner,
         previousSpeakerToken,

@@ -99,6 +99,7 @@ export type CollaborationState = {
   speakerToken?: string;
   scriptedTurnIndex?: number;
   scriptedTotalTurns?: number;
+  scriptedDispatchedTurnKey?: string;
   lastSpeakerId?: string;
   coordinateDispatchedAgents: string[];
   assessments: Record<string, CollaborationAssessment>;
@@ -191,6 +192,12 @@ function maybeAdvanceState(state: CollaborationState): CollaborationState {
     phase: "active_collab" as const,
     currentOwner: nextOwner,
     speakerToken: nextOwner,
+    scriptedTurnIndex: state.protocol === "scripted_peer" ? 0 : state.scriptedTurnIndex,
+    scriptedTotalTurns:
+      state.protocol === "scripted_peer"
+        ? computeScriptedPeerTotalTurns(state.participants.length, state.maxHops)
+        : state.scriptedTotalTurns,
+    scriptedDispatchedTurnKey: undefined,
     updatedAtMs: Date.now(),
   };
   collaborationStateByKey.set(state.stateKey, nextState);
@@ -360,6 +367,7 @@ export function advanceScriptedPeerTurn(
       lastSpeakerId: agentId,
       scriptedTurnIndex: nextTurnIndex,
       scriptedTotalTurns: totalTurns,
+      scriptedDispatchedTurnKey: undefined,
     });
   }
   const currentOwnerIndex = state.participants.indexOf(agentId);
@@ -372,6 +380,34 @@ export function advanceScriptedPeerTurn(
     lastSpeakerId: agentId,
     scriptedTurnIndex: nextTurnIndex,
     scriptedTotalTurns: totalTurns,
+    scriptedDispatchedTurnKey: undefined,
+  });
+}
+
+function buildScriptedTurnDispatchKey(state: CollaborationState): string | undefined {
+  if (
+    state.protocol !== "scripted_peer" ||
+    state.phase !== "active_collab" ||
+    !state.currentOwner ||
+    typeof state.scriptedTurnIndex !== "number"
+  ) {
+    return undefined;
+  }
+  return `${state.phase}:${state.currentOwner}:${state.scriptedTurnIndex}`;
+}
+
+export function claimScriptedPeerTurnDispatch(taskId: string): CollaborationState | undefined {
+  const state = collaborationStateByTaskId.get(taskId);
+  if (!state) {
+    return state;
+  }
+  const dispatchKey = buildScriptedTurnDispatchKey(state);
+  if (!dispatchKey || state.scriptedDispatchedTurnKey === dispatchKey) {
+    return undefined;
+  }
+  return replaceState({
+    ...state,
+    scriptedDispatchedTurnKey: dispatchKey,
   });
 }
 
