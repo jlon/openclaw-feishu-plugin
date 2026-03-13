@@ -9,6 +9,7 @@ import {
   getCollaborationStateStatsForTesting,
   markScriptedPeerAssessmentComplete,
   parseCollaborationControlBlocks,
+  recordCollaborationVisibleTurn,
   sweepCollaborationStatesForTesting,
 } from "./collaboration.js";
 
@@ -208,6 +209,45 @@ describe("collaboration state", () => {
     );
   });
 
+  it("records recent visible turns and exposes them in runtime context", () => {
+    const state = ensureCollaborationState({
+      chatId: "oc_group_scripted_visible_turns",
+      messageId: "msg_scripted_visible_turns",
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre"],
+      maxHops: 2,
+      explicitMode: "peer_collab",
+    });
+    markScriptedPeerAssessmentComplete(state.taskId, "flink-sre");
+    markScriptedPeerAssessmentComplete(state.taskId, "starrocks-sre");
+    recordCollaborationVisibleTurn({
+      taskId: state.taskId,
+      agentId: "flink-sre",
+      text: "从 Flink 视角先看，灵魂更像状态记忆。",
+    });
+    recordCollaborationVisibleTurn({
+      taskId: state.taskId,
+      agentId: "starrocks-sre",
+      text: "从 StarRocks 视角补一层，灵魂也体现在持久化与恢复。",
+    });
+
+    const ctx = buildCollaborationRuntimeContext({
+      state: getCollaborationStateForTesting(state.taskId)!,
+      agentId: "flink-sre",
+    });
+
+    expect(ctx.recentVisibleTurns).toEqual([
+      expect.objectContaining({
+        agentId: "flink-sre",
+        text: "从 Flink 视角先看，灵魂更像状态记忆。",
+      }),
+      expect.objectContaining({
+        agentId: "starrocks-sre",
+        text: "从 StarRocks 视角补一层，灵魂也体现在持久化与恢复。",
+      }),
+    ]);
+  });
+
   it("builds runtime context from current collaboration state", () => {
     const state = ensureCollaborationState({
       chatId: "oc_group_1",
@@ -235,6 +275,7 @@ describe("collaboration state", () => {
       maxHops: 4,
       isCurrentOwner: true,
       activeHandoff: undefined,
+      recentVisibleTurns: [],
       allowedActions: ["agent_handoff", "agent_handoff_complete"],
     });
   });

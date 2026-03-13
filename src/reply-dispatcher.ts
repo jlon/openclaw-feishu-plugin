@@ -8,7 +8,11 @@ import {
 } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import { applyCollaborationActions, parseCollaborationControlBlocks } from "./collaboration.js";
+import {
+  applyCollaborationActions,
+  parseCollaborationControlBlocks,
+  recordCollaborationVisibleTurn,
+} from "./collaboration.js";
 import { sendMediaFeishu } from "./media.js";
 import type { MentionTarget } from "./mention.js";
 import { buildMentionedCardContent } from "./mention.js";
@@ -124,6 +128,7 @@ export type CreateFeishuReplyDispatcherParams = {
   /** Epoch ms when the inbound message was created. Used to suppress typing
    *  indicators on old/replayed messages after context compaction (#30418). */
   messageCreateTimeMs?: number;
+  collaborationTaskId?: string;
 };
 
 export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherParams) {
@@ -377,6 +382,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         }
 
         if (shouldDeliverText) {
+          if (info?.kind === "final" && params.collaborationTaskId) {
+            recordCollaborationVisibleTurn({
+              taskId: params.collaborationTaskId,
+              agentId,
+              text,
+            });
+          }
           const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
 
           if (info?.kind === "block") {

@@ -103,7 +103,14 @@ export type CollaborationState = {
   coordinateDispatchedAgents: string[];
   assessments: Record<string, CollaborationAssessment>;
   activeHandoffState?: CollaborationActiveHandoffState;
+  recentVisibleTurns: CollaborationVisibleTurn[];
   updatedAtMs: number;
+};
+
+export type CollaborationVisibleTurn = {
+  agentId: string;
+  text: string;
+  timestampMs: number;
 };
 
 export type CollaborationRuntimeContext = {
@@ -121,6 +128,7 @@ export type CollaborationRuntimeContext = {
   isFinalScriptedTurn?: boolean;
   isCurrentOwner: boolean;
   activeHandoff?: CollaborationActiveHandoffState;
+  recentVisibleTurns: CollaborationVisibleTurn[];
   allowedActions: CollaborationAllowedAction[];
 };
 
@@ -246,6 +254,7 @@ export function ensureCollaborationState(params: {
     speakerToken: params.mode === "coordinate" ? "main" : undefined,
     coordinateDispatchedAgents: [],
     assessments: {},
+    recentVisibleTurns: [],
     updatedAtMs: Date.now(),
   };
   collaborationStateByKey.set(stateKey, nextState);
@@ -287,6 +296,36 @@ export function markScriptedPeerAssessmentComplete(
     speakerToken: nextState.participants[0],
     scriptedTurnIndex: 0,
     scriptedTotalTurns: Math.max(1, nextState.maxHops + 1),
+  });
+}
+
+
+export function recordCollaborationVisibleTurn(params: {
+  taskId: string;
+  agentId: string;
+  text: string;
+  timestampMs?: number;
+}): CollaborationState | undefined {
+  sweepExpiredCollaborationStates();
+  const state = collaborationStateByTaskId.get(params.taskId);
+  const text = params.text.trim();
+  if (!state || !text) {
+    return state;
+  }
+  const nextTurn = {
+    agentId: params.agentId,
+    text,
+    timestampMs: params.timestampMs ?? Date.now(),
+  };
+  const previousTurns = state.recentVisibleTurns ?? [];
+  const lastTurn = previousTurns[previousTurns.length - 1];
+  if (lastTurn?.agentId === nextTurn.agentId && lastTurn.text === nextTurn.text) {
+    return state;
+  }
+  const nextTurns = [...previousTurns, nextTurn].slice(-6);
+  return replaceState({
+    ...state,
+    recentVisibleTurns: nextTurns,
   });
 }
 
@@ -790,6 +829,7 @@ export function buildCollaborationRuntimeContext(params: {
         : undefined,
     isCurrentOwner,
     activeHandoff,
+    recentVisibleTurns: params.state.recentVisibleTurns,
     allowedActions,
   };
 }

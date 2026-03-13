@@ -219,8 +219,56 @@ describe("buildFeishuAgentBody", () => {
     });
 
     expect(body).toContain("This is a scripted peer collaboration round.");
+    expect(body).toContain("CollaborationRuntimeManaged=true.");
+    expect(body).toContain(
+      "Runtime owns participant routing, visible @ display, turn order, and whether main should participate.",
+    );
     expect(body).not.toContain('"action":"collab_assess"');
     expect(body).not.toContain("hidden control block");
+  });
+
+  it("injects recent visible turns into scripted peer prompts", () => {
+    const body = buildFeishuAgentBody({
+      ctx: {
+        content: "user: @Flink-SRE @Starrocks-SRE 你俩讨论什么是灵魂",
+        senderName: "user",
+        senderOpenId: "ou_sender",
+        messageId: "msg-scripted-peer-recent-turns",
+        hasAnyMention: true,
+        groupCoAddressMode: "peer_collab",
+        collaboration: {
+          taskId: "task_scripted_peer_recent_turns",
+          mode: "peer_collab",
+          protocol: "scripted_peer",
+          phase: "active_collab",
+          participants: ["flink-sre", "starrocks-sre"],
+          currentOwner: "starrocks-sre",
+          speakerToken: "starrocks-sre",
+          handoffCount: 1,
+          maxHops: 3,
+          scriptedTurnIndex: 2,
+          scriptedTotalTurns: 4,
+          isFinalScriptedTurn: false,
+          isCurrentOwner: true,
+          allowedActions: [],
+          recentVisibleTurns: [
+            { agentId: "flink-sre", text: "灵魂像持续的身份认同。", timestampMs: 1 },
+            { agentId: "starrocks-sre", text: "还得补持久化和恢复。", timestampMs: 2 },
+          ],
+        },
+      },
+      botOpenId: "ou_starrocks",
+      autoMentionTargets: false,
+      agentId: "starrocks-sre",
+    });
+
+    expect(body).toContain("Continue from the latest visible collaboration turns");
+    expect(body).toContain(
+      "RecentVisibleTurns=flink-sre: 灵魂像持续的身份认同。 | starrocks-sre: 还得补持久化和恢复。",
+    );
+    expect(body).toContain(
+      "Read RecentVisibleTurns first and continue from the latest visible point made by another participant instead of restarting the discussion.",
+    );
   });
 
   it("tells the final scripted peer speaker to synthesize and stop", () => {
@@ -2011,8 +2059,10 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
       expect.objectContaining({
         CollaborationTaskId: expect.stringMatching(/^task_[0-9a-f]{12}$/),
+        CollaborationRuntimeManaged: "true",
         CollaborationHandoffCount: 0,
         CollaborationMaxHops: 2,
+        CollaborationRecentTurns: undefined,
       }),
     );
   });

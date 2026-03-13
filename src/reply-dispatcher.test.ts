@@ -294,6 +294,47 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
   });
 
+  it("records sanitized visible collaboration turns on final delivery", async () => {
+    const state = ensureCollaborationState({
+      chatId: "oc_chat",
+      messageId: "msg_visible_turn",
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre"],
+      maxHops: 2,
+      explicitMode: "peer_collab",
+    });
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "flink-sre",
+      runtime: {} as never,
+      chatId: "oc_chat",
+      collaborationTaskId: state.taskId,
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.deliver(
+      {
+        text:
+          "从 Flink 视角先看，灵魂更像状态记忆。\n\n```openclaw-collab\n" +
+          JSON.stringify({
+            action: "collab_assess",
+            taskId: state.taskId,
+            agentId: "flink-sre",
+            ownershipClaim: "owner_candidate",
+          }) +
+          "\n```",
+      },
+      { kind: "final" },
+    );
+
+    expect(getCollaborationStateForTesting(state.taskId)?.recentVisibleTurns).toEqual([
+      expect.objectContaining({
+        agentId: "flink-sre",
+        text: "从 Flink 视角先看，灵魂更像状态记忆。",
+      }),
+    ]);
+  });
+
   it("strips trailing bare collaboration json from visible replies on final", async () => {
     const state = ensureCollaborationState({
       chatId: "oc_chat",
