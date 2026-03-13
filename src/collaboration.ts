@@ -45,7 +45,7 @@ export type CollaborationHandoffAction = {
 
 export type CollaborationHandoffResponseAction = {
   action: "agent_handoff_accept" | "agent_handoff_reject" | "agent_handoff_need_info";
-  taskId: string;
+  taskId?: string;
   handoffId: string;
   agentId: string;
 };
@@ -354,16 +354,12 @@ function toHandoffResponseAction(value: unknown): CollaborationHandoffResponseAc
   ) {
     return null;
   }
-  if (
-    typeof action.taskId !== "string" ||
-    typeof action.handoffId !== "string" ||
-    typeof action.agentId !== "string"
-  ) {
+  if (typeof action.handoffId !== "string" || typeof action.agentId !== "string") {
     return null;
   }
   return {
     action: action.action,
-    taskId: action.taskId,
+    taskId: typeof action.taskId === "string" ? action.taskId : undefined,
     handoffId: action.handoffId,
     agentId: action.agentId,
   };
@@ -381,16 +377,12 @@ function toHandoffResolutionAction(value: unknown): CollaborationHandoffResoluti
   ) {
     return null;
   }
-  if (
-    typeof action.taskId !== "string" ||
-    typeof action.handoffId !== "string" ||
-    typeof action.agentId !== "string"
-  ) {
+  if (typeof action.handoffId !== "string" || typeof action.agentId !== "string") {
     return null;
   }
   return {
     action: action.action,
-    taskId: action.taskId,
+    taskId: typeof action.taskId === "string" ? action.taskId : undefined,
     handoffId: action.handoffId,
     agentId: action.agentId,
   };
@@ -470,11 +462,30 @@ export function parseCollaborationControlBlocks(text: string): {
   };
 }
 
+function resolveStateForHandoffAction(action: CollaborationControlAction): CollaborationState | undefined {
+  if ("taskId" in action && typeof action.taskId === "string") {
+    return collaborationStateByTaskId.get(action.taskId);
+  }
+  if (
+    action.action === "agent_handoff_accept" ||
+    action.action === "agent_handoff_reject" ||
+    action.action === "agent_handoff_need_info"
+  ) {
+    return [...collaborationStateByTaskId.values()].find(
+      (state) =>
+        (state.phase === "awaiting_accept" || state.phase === "blocked_need_info") &&
+        state.activeHandoffState?.handoffId === action.handoffId &&
+        state.activeHandoffState.targetAgentId === action.agentId,
+    );
+  }
+  return undefined;
+}
+
 export function applyCollaborationActions(actions: CollaborationControlAction[]): CollaborationState[] {
   sweepExpiredCollaborationStates();
   const touchedStates: CollaborationState[] = [];
   for (const action of actions) {
-    const state = collaborationStateByTaskId.get(action.taskId);
+    const state = resolveStateForHandoffAction(action);
     if (!state) {
       continue;
     }

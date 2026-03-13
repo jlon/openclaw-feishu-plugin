@@ -17,6 +17,7 @@ import { sendMarkdownCardFeishu, sendMessageFeishu } from "./send.js";
 import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
+import { botNames, botOpenIds } from "./monitor.state.js";
 
 /** Detect if text contains markdown elements that benefit from card rendering */
 function shouldUseCard(text: string): boolean {
@@ -55,6 +56,41 @@ function sanitizeVisibleReplyText(text: string, hasMentionTargets: boolean): str
   );
 }
 
+function resolveCollaborationVisibleMentionTarget(
+  cfg: ClawdbotConfig,
+  targetAgentId: string,
+): MentionTarget | undefined {
+  const normalizedTarget = targetAgentId.trim().toLowerCase();
+  if (!normalizedTarget) {
+    return undefined;
+  }
+  const accountConfig = cfg.channels?.feishu?.accounts as Record<string, unknown> | undefined;
+  const accountId =
+    Object.keys(accountConfig ?? {}).find((key) => key.trim().toLowerCase() === normalizedTarget) ??
+    targetAgentId;
+  const openId = botOpenIds.get(accountId) ?? botOpenIds.get(targetAgentId);
+  if (!openId) {
+    return undefined;
+  }
+  const configuredName =
+    accountConfig &&
+    typeof accountConfig[accountId] === "object" &&
+    accountConfig[accountId] !== null &&
+    typeof (accountConfig[accountId] as Record<string, unknown>).name === "string"
+      ? ((accountConfig[accountId] as Record<string, unknown>).name as string).trim()
+      : "";
+  const name =
+    botNames.get(accountId)?.trim() ||
+    botNames.get(targetAgentId)?.trim() ||
+    configuredName ||
+    targetAgentId;
+  return {
+    openId,
+    name,
+    key: `@visible_${accountId}`,
+  };
+}
+
 /** Maximum age (ms) for a message to receive a typing indicator reaction.
  * Messages older than this are likely replays after context compaction (#30418). */
 const TYPING_INDICATOR_MAX_AGE_MS = 2 * 60_000;
@@ -82,6 +118,8 @@ export type CreateFeishuReplyDispatcherParams = {
   threadReply?: boolean;
   rootId?: string;
   mentionTargets?: MentionTarget[];
+  visibleMentionTargets?: MentionTarget[];
+  collaborationAgentResolver?: (agentId: string) => MentionTarget | undefined;
   accountId?: string;
   /** Epoch ms when the inbound message was created. Used to suppress typing
    *  indicators on old/replayed messages after context compaction (#30418). */
@@ -100,8 +138,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     threadReply,
     rootId,
     mentionTargets,
+    visibleMentionTargets,
+    collaborationAgentResolver,
     accountId,
   } = params;
+  const effectiveMentionTargets = visibleMentionTargets ?? mentionTargets;
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
   const threadReplyMode = threadReply === true;
   const effectiveReplyInThread = threadReplyMode ? true : replyInThread;
@@ -177,10 +218,26 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streamText = "";
   let lastPartial = "";
   let pendingFinalText = "";
+  let pendingFinalMentionTargets: MentionTarget[] | undefined;
   const deliveredFinalTexts = new Set<string>();
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
   type StreamTextUpdateMode = "snapshot" | "delta";
+
+  const resolveActionMentionTargets = (text: string, kind?: "final" | "block") => {
+    if (kind !== "final" || effectiveMentionTargets?.length) {
+      return [] as MentionTarget[];
+    }
+    const { actions } = parseCollaborationControlBlocks(text);
+    const resolveTarget =
+      collaborationAgentResolver ??
+      ((agentId: string) => resolveCollaborationVisibleMentionTarget(cfg, agentId));
+    return actions
+      .flatMap((action) =>
+        action.action === "agent_handoff" ? [resolveTarget(action.targetAgentId)] : [],
+      )
+      .filter((value): value is MentionTarget => Boolean(value));
+  };
 
   const queueStreamingUpdate = (
     nextText: string,
@@ -206,9 +263,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         await streamingStartPromise;
       }
       if (streaming?.isActive()) {
-        const text = sanitizeVisibleReplyText(streamText, Boolean(mentionTargets?.length));
+        const text = sanitizeVisibleReplyText(streamText, Boolean(effectiveMentionTargets?.length));
         await streaming.update(
-          mentionTargets?.length ? buildMentionedCardContent(mentionTargets, text) : text,
+          effectiveMentionTargets?.length
+            ? buildMentionedCardContent(effectiveMentionTargets, text)
+            : text,
         );
       }
     });
@@ -251,10 +310,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     if (streaming?.isActive()) {
       let text = sanitizeVisibleReplyText(
         pendingFinalText || streamText,
-        Boolean(mentionTargets?.length),
+        Boolean(effectiveMentionTargets?.length),
       );
-      if (mentionTargets?.length) {
-        text = buildMentionedCardContent(mentionTargets, text);
+      const closeMentionTargets =
+        pendingFinalMentionTargets && pendingFinalMentionTargets.length > 0
+          ? pendingFinalMentionTargets
+          : effectiveMentionTargets;
+      if (closeMentionTargets?.length) {
+        text = buildMentionedCardContent(closeMentionTargets, text);
       }
       await streaming.close(text);
       if (text.trim()) {
@@ -266,6 +329,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     streamText = "";
     lastPartial = "";
     pendingFinalText = "";
+    pendingFinalMentionTargets = undefined;
   };
 
   const { dispatcher, replyOptions, markDispatchIdle } =
@@ -282,13 +346,20 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       },
       deliver: async (payload: ReplyPayload, info) => {
         const rawText = payload.text ?? "";
+        const actionMentionTargets = resolveActionMentionTargets(rawText, info?.kind);
+        const renderMentionTargets =
+          effectiveMentionTargets && effectiveMentionTargets.length > 0
+            ? effectiveMentionTargets
+            : actionMentionTargets.length > 0
+              ? actionMentionTargets
+              : undefined;
         if (info?.kind === "final") {
           const { actions } = parseCollaborationControlBlocks(rawText);
           if (actions.length > 0) {
             applyCollaborationActions(actions);
           }
         }
-        const text = sanitizeVisibleReplyText(rawText, Boolean(mentionTargets?.length));
+        const text = sanitizeVisibleReplyText(rawText, Boolean(renderMentionTargets?.length));
         const mediaList =
           payload.mediaUrls && payload.mediaUrls.length > 0
             ? payload.mediaUrls
@@ -335,6 +406,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             }
             if (info?.kind === "final") {
               pendingFinalText = rawText;
+              pendingFinalMentionTargets = renderMentionTargets;
               streamText = text;
             }
             // Send media even when streaming handled the text
@@ -366,7 +438,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 text: chunk,
                 replyToMessageId: sendReplyToMessageId,
                 replyInThread: effectiveReplyInThread,
-                mentions: first ? mentionTargets : undefined,
+                mentions: first ? renderMentionTargets : undefined,
                 accountId,
               });
               first = false;
@@ -387,7 +459,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 text: chunk,
                 replyToMessageId: sendReplyToMessageId,
                 replyInThread: effectiveReplyInThread,
-                mentions: first ? mentionTargets : undefined,
+                mentions: first ? renderMentionTargets : undefined,
                 accountId,
               });
               first = false;

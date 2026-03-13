@@ -426,6 +426,74 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
   });
 
+  it("auto-mentions handoff target in visible replies when no explicit mention targets are provided", async () => {
+    const state = ensureCollaborationState({
+      chatId: "oc_chat",
+      messageId: "msg_handoff_visible_target",
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre"],
+      maxHops: 3,
+    });
+    applyCollaborationActions([
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "flink-sre",
+        ownershipClaim: "owner_candidate",
+      },
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "starrocks-sre",
+        ownershipClaim: "supporting",
+      },
+    ]);
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "flink-sre",
+      runtime: {} as never,
+      chatId: "oc_chat",
+      collaborationAgentResolver: (agentId) =>
+        agentId === "starrocks-sre"
+          ? { openId: "ou_starrocks", name: "Starrocks-SRE", key: "@visible_starrocks-sre" }
+          : undefined,
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls.at(-1)?.[0];
+    await options.deliver(
+      {
+        text:
+          "我先补一层计算侧判断。\n\n```openclaw-collab\n" +
+          JSON.stringify({
+            action: "agent_handoff",
+            taskId: state.taskId,
+            handoffId: "handoff_visible_target",
+            fromAgentId: "flink-sre",
+            targetAgentId: "starrocks-sre",
+            timeWindow: "18:20-18:35",
+            currentFinding: "sink 吞吐下降",
+            unresolvedQuestion: "查询层是否是独立源头",
+            evidencePaths: ["shared/tasks/task_x/evidence/02-compute.md"],
+          }) +
+          "\n```",
+      },
+      { kind: "final" },
+    );
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "我先补一层计算侧判断。",
+        mentions: [
+          expect.objectContaining({
+            openId: "ou_starrocks",
+            name: "Starrocks-SRE",
+          }),
+        ],
+      }),
+    );
+  });
+
   it("sets disableBlockStreaming in replyOptions to prevent silent reply drops", async () => {
     const result = createFeishuReplyDispatcher({
       cfg: {} as never,
@@ -659,6 +727,39 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances).toHaveLength(1);
     expect(streamingInstances[0].close).toHaveBeenCalledWith(
       "<at id=ou_target></at> 云上Bot，你好！我是小飞龙。",
+    );
+  });
+
+  it("renders visible mention targets independently from control-plane mention targets", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    const result = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+      visibleMentionTargets: [{ openId: "ou_main", name: "首席大管家", key: "@visible_main" }],
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls.at(-1)?.[0];
+    await options.onReplyStart?.();
+    await result.replyOptions.onPartialReply?.({
+      text: "@首席大管家 我先补一层服务侧观察。",
+    });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith(
+      "<at id=ou_main></at> 我先补一层服务侧观察。",
     );
   });
 

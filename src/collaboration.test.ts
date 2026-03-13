@@ -551,6 +551,51 @@ describe("collaboration state", () => {
     });
   });
 
+  it("accepts a handoff response without taskId when handoffId uniquely matches an active handoff", () => {
+    const state = ensureCollaborationState({
+      chatId: "oc_group_missing_taskid",
+      messageId: "msg_missing_taskid",
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre"],
+      maxHops: 3,
+    });
+    applyCollaborationActions([
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "flink-sre",
+        ownershipClaim: "owner_candidate",
+      },
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "starrocks-sre",
+        ownershipClaim: "supporting",
+      },
+      {
+        action: "agent_handoff",
+        taskId: state.taskId,
+        handoffId: "handoff_missing_taskid",
+        fromAgentId: "flink-sre",
+        targetAgentId: "starrocks-sre",
+        timeWindow: "",
+        currentFinding: "请从存储/查询视角补一层",
+        unresolvedQuestion: "请从存储/查询视角补一层",
+        evidencePaths: [],
+      },
+      {
+        action: "agent_handoff_accept",
+        handoffId: "handoff_missing_taskid",
+        agentId: "starrocks-sre",
+      },
+    ]);
+    const finalState = getCollaborationStateForTesting(state.taskId);
+    expect(finalState?.phase).toBe("active_collab");
+    expect(finalState?.currentOwner).toBe("starrocks-sre");
+    expect(finalState?.handoffCount).toBe(1);
+    expect(finalState?.activeHandoffState).toBeUndefined();
+  });
+
   it("lets the source owner cancel or reassign while handoff is awaiting acceptance", () => {
     const state = ensureCollaborationState({
       chatId: "oc_group_1",

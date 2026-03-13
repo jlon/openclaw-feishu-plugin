@@ -54,6 +54,8 @@ export type FeishuMessageContext = {
   contentType: string;
   /** Mention forward targets (excluding the bot itself) */
   mentionTargets?: MentionTarget[];
+  /** Visible-only mention targets for group collaboration display. */
+  visibleMentionTargets?: MentionTarget[];
   groupCoAddressMode?: GroupCoAddressMode;
   collaboration?: CollaborationRuntimeContext;
 };

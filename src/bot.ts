@@ -23,6 +23,7 @@ import {
   classifyGroupCoAddressMode,
   extractMentionTargets,
   isMentionForwardRequest,
+  type MentionTarget,
 } from "./mention.js";
 import {
   resolveFeishuGroupConfig,
@@ -1006,6 +1007,13 @@ export function buildFeishuAgentBody(params: {
       `Do not continue prior rounds with different agents or users unless they are explicitly mentioned again in this turn.]`;
   }
 
+  if (ctx.visibleMentionTargets && ctx.visibleMentionTargets.length > 0) {
+    const visibleTargetNames = ctx.visibleMentionTargets.map((target) => target.name).join(", ");
+    messageBody +=
+      `\n[System: Your visible reply will automatically @mention ${visibleTargetNames} for display only. ` +
+      `Do not write @xxx or <at ...> yourself.]`;
+  }
+
   if (ctx.groupCoAddressMode === "direct_reply") {
     messageBody +=
       `\n\n[System: This group message is co-addressed to multiple people or bots. ` +
@@ -1062,8 +1070,9 @@ export function buildFeishuAgentBody(params: {
           if (canHandoff) {
             messageBody +=
               `\n[System: Visible reply should first add one deeper point from your own role in one or two short sentences.]` +
-              `\n[System: If you hand off, explicitly cue the next participant in plain words in the visible reply before the hidden control block.]` +
-              `\n[System: After the visible baton cue, stop. Do not add extra '收到' or '等待对方' style follow-up lines.]` +
+              `\n[System: If you hand off, end the visible reply with one short natural transition into the next participant's domain before the hidden control block.]` +
+              `\n[System: Do not use explicit baton language such as '接力棒', '轮到你', '收到', '我把话头交给你', or '等待对方'.]` +
+              `\n[System: After the visible transition, stop. Do not add any extra follow-up line.]` +
               `\n[System: If you need to pass the lead, append exactly one hidden control block in this format:` +
               `\n\`\`\`openclaw-collab` +
               `\n{"action":"agent_handoff","taskId":"${collaboration.taskId}","agentId":"${agentId}","handoffTo":"target-agent-id","handoffReason":"一句话说明为什么交给对方"}` +
@@ -1105,10 +1114,11 @@ export function buildFeishuAgentBody(params: {
           messageBody += `\n[System: Evidence paths: ${activeHandoff.evidencePaths.join(", ")}.]`;
         }
         messageBody +=
-          `\n[System: Visible reply should explicitly acknowledge the baton and continue from your own role in one or two short sentences before the hidden control block.]` +
-          `\n[System: After the visible acknowledgement and your contribution, stop. Do not append extra completion chatter.]` +
+          `\n[System: Visible reply should continue naturally from your own role in one or two short sentences before the hidden control block.]` +
+          `\n[System: Do not explicitly say '收到接力棒', '轮到我', '我来接手', or similar baton language.]` +
+          `\n[System: After your contribution, stop. Do not append extra completion chatter.]` +
           `\n[System: Do not call sessions_send, sessions_spawn, subagents, or message here. Accept, reject, or ask for missing information using the hidden control block only.]` +
-          `\n[System: Reply briefly, then append exactly one hidden control block with action agent_handoff_accept, agent_handoff_reject, or agent_handoff_need_info using handoffId ${activeHandoff.handoffId}.]`;
+          `\n[System: Reply briefly, then append exactly one hidden control block with action agent_handoff_accept, agent_handoff_reject, or agent_handoff_need_info using handoffId ${activeHandoff.handoffId}, and include taskId ${collaboration.taskId}.]`;
       } else if (collaboration.isCurrentOwner) {
         messageBody +=
           `\n[System: Handoff ${activeHandoff.handoffId} is pending acceptance by ${activeHandoff.targetAgentId}.]` +
@@ -1577,18 +1587,19 @@ export async function handleFeishuMessage(params: {
         : undefined;
 
     // --- Shared context builder for dispatch ---
-    const buildCtxPayloadForAgent = (
-      agentSessionKey: string,
-      agentAccountId: string,
-      wasMentioned: boolean,
-      agentIdForBody: string,
-      options?: {
-        collaborationStateOverride?: typeof collaborationState;
-        autoMentionTargetsOverride?: boolean;
-        mentionTargetsOverride?: FeishuMessageContext["mentionTargets"];
-        messageIdOverride?: string;
-      },
-    ) => {
+      const buildCtxPayloadForAgent = (
+        agentSessionKey: string,
+        agentAccountId: string,
+        wasMentioned: boolean,
+        agentIdForBody: string,
+        options?: {
+          collaborationStateOverride?: typeof collaborationState;
+          autoMentionTargetsOverride?: boolean;
+          mentionTargetsOverride?: FeishuMessageContext["mentionTargets"];
+          visibleMentionTargetsOverride?: FeishuMessageContext["visibleMentionTargets"];
+          messageIdOverride?: string;
+        },
+      ) => {
       const normalizedAgentId = normalizeAgentId(agentIdForBody);
       const effectiveCollaborationState = options?.collaborationStateOverride ?? collaborationState;
       const collaboration: CollaborationRuntimeContext | undefined = effectiveCollaborationState
@@ -1598,12 +1609,14 @@ export async function handleFeishuMessage(params: {
           })
         : undefined;
       const baseCtx =
-        options?.mentionTargetsOverride === undefined
+        options?.mentionTargetsOverride === undefined &&
+        options?.visibleMentionTargetsOverride === undefined
           ? { ...ctx, messageId: options?.messageIdOverride ?? ctx.messageId }
           : {
               ...ctx,
               messageId: options?.messageIdOverride ?? ctx.messageId,
               mentionTargets: options.mentionTargetsOverride,
+              visibleMentionTargets: options.visibleMentionTargetsOverride,
             };
       const ctxForAgent = collaboration ? { ...baseCtx, collaboration } : baseCtx;
       const messageBody = buildFeishuAgentBody({
@@ -1693,8 +1706,8 @@ export async function handleFeishuMessage(params: {
       });
     };
 
-    const resolveHandoffTargetAccountId = (targetAgentId: string): string => {
-      const normalizedTarget = normalizeAgentId(targetAgentId);
+      const resolveHandoffTargetAccountId = (targetAgentId: string): string => {
+        const normalizedTarget = normalizeAgentId(targetAgentId);
       if (normalizedTarget === normalizeAgentId(route.agentId)) {
         return route.accountId;
       }
@@ -1705,9 +1718,45 @@ export async function handleFeishuMessage(params: {
             return key;
           }
         }
-      }
-      return targetAgentId;
-    };
+        }
+        return targetAgentId;
+      };
+
+      const buildVisibleMentionTargetForAgent = (targetAgentId: string): MentionTarget | undefined => {
+        const accountId = resolveHandoffTargetAccountId(targetAgentId);
+        const openId = botOpenIds.get(accountId) ?? botOpenIds.get(targetAgentId);
+        if (!openId) {
+          return undefined;
+        }
+        const configuredAccounts = feishuCfg?.accounts as Record<string, unknown> | undefined;
+        const configuredAccount =
+          configuredAccounts &&
+          typeof configuredAccounts[accountId] === "object" &&
+          configuredAccounts[accountId] !== null
+            ? (configuredAccounts[accountId] as Record<string, unknown>)
+            : undefined;
+        const configuredName =
+          typeof configuredAccount?.name === "string" ? configuredAccount.name.trim() : "";
+        const name =
+          botNames.get(accountId)?.trim() ||
+          botNames.get(targetAgentId)?.trim() ||
+          configuredName ||
+          targetAgentId;
+        return {
+          openId,
+          name,
+          key: `@visible_${accountId}`,
+        };
+      };
+
+      const buildVisibleMentionTargetsForAgents = (
+        agentIds: readonly string[] | undefined,
+      ): MentionTarget[] | undefined => {
+        const targets = (agentIds ?? [])
+          .map((agentId) => buildVisibleMentionTargetForAgent(agentId))
+          .filter((value): value is MentionTarget => Boolean(value));
+        return targets.length > 0 ? targets : undefined;
+      };
 
     const maybeDispatchPendingHandoff = async (params: {
       sourceAgentId: string;
@@ -1728,6 +1777,7 @@ export async function handleFeishuMessage(params: {
         return;
       }
       const targetAgentId = activeHandoff.targetAgentId;
+      const activeHandoffId = activeHandoff.handoffId;
       const targetAccountId = resolveHandoffTargetAccountId(targetAgentId);
       const targetSessionKey = core.channel.routing.buildAgentSessionKey({
         agentId: targetAgentId,
@@ -1746,6 +1796,9 @@ export async function handleFeishuMessage(params: {
           collaborationStateOverride: latestState,
           autoMentionTargetsOverride: false,
           mentionTargetsOverride: undefined,
+          visibleMentionTargetsOverride: buildVisibleMentionTargetsForAgents([
+            activeHandoff.fromAgentId,
+          ]),
           messageIdOverride: `${ctx.messageId}::handoff::${activeHandoff.handoffId}::${targetAgentId}`,
         },
       );
@@ -1760,6 +1813,7 @@ export async function handleFeishuMessage(params: {
         rootId: ctx.rootId,
         threadReply,
         mentionTargets: undefined,
+        visibleMentionTargets: buildVisibleMentionTargetsForAgents([activeHandoff.fromAgentId]),
         accountId: targetAccountId,
         messageCreateTimeMs,
       });
@@ -1785,6 +1839,13 @@ export async function handleFeishuMessage(params: {
                 replyOptions,
               }),
           }),
+      });
+      await waitForCollaborationStateChange({
+        taskId: latestState.taskId,
+        previousPhase,
+        previousOwner,
+        previousSpeakerToken,
+        previousActiveHandoffId: activeHandoffId,
       });
       await maybeDispatchCurrentOwnerFollowup({
         previousPhase,
@@ -1873,6 +1934,13 @@ export async function handleFeishuMessage(params: {
               }),
           }),
       });
+      await waitForCollaborationStateChange({
+        taskId: latestState.taskId,
+        previousPhase,
+        previousOwner,
+        previousSpeakerToken,
+        previousActiveHandoffId: previousHandoffId,
+      });
       await maybeDispatchCurrentOwnerFollowup({
         previousPhase,
         previousOwner,
@@ -1911,6 +1979,7 @@ export async function handleFeishuMessage(params: {
             collaborationStateOverride: claim.state,
             autoMentionTargetsOverride: false,
             mentionTargetsOverride: undefined,
+            visibleMentionTargetsOverride: buildVisibleMentionTargetsForAgents(["main"]),
             messageIdOverride: `${ctx.messageId}::coordinate::${claim.state.taskId}::${targetAgentId}`,
           },
         );
@@ -1925,6 +1994,7 @@ export async function handleFeishuMessage(params: {
           rootId: ctx.rootId,
           threadReply,
           mentionTargets: undefined,
+          visibleMentionTargets: buildVisibleMentionTargetsForAgents(["main"]),
           accountId: targetAccountId,
           messageCreateTimeMs,
         });
@@ -2121,11 +2191,22 @@ export async function handleFeishuMessage(params: {
       );
     } else {
       // --- Single-agent dispatch (existing behavior) ---
+      const initialVisibleMentionTargets =
+        collaborationState?.mode === "coordinate" && normalizeAgentId(route.agentId) === "main"
+          ? buildVisibleMentionTargetsForAgents(
+              collaborationState.participants.filter(
+                (participant) => normalizeAgentId(participant) !== "main",
+              ),
+            )
+          : undefined;
       const ctxPayload = buildCtxPayloadForAgent(
         route.sessionKey,
         route.accountId,
         ctx.mentionedBot,
         route.agentId,
+        {
+          visibleMentionTargetsOverride: initialVisibleMentionTargets,
+        },
       );
 
       const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
@@ -2139,6 +2220,7 @@ export async function handleFeishuMessage(params: {
         rootId: ctx.rootId,
         threadReply,
         mentionTargets: normalizeAgentId(route.agentId) === "main" ? undefined : ctx.mentionTargets,
+        visibleMentionTargets: initialVisibleMentionTargets,
         accountId: account.accountId,
         messageCreateTimeMs,
       });
@@ -2220,6 +2302,36 @@ export async function runCollaborationDispatchWithRetry<T>(params: {
     }
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+async function waitForCollaborationStateChange(params: {
+  taskId: string;
+  previousPhase?: string;
+  previousOwner?: string;
+  previousSpeakerToken?: string;
+  previousActiveHandoffId?: string;
+  timeoutMs?: number;
+  pollMs?: number;
+  sleep?: (delayMs: number) => Promise<void>;
+}): Promise<void> {
+  const timeoutMs = params.timeoutMs ?? 3000;
+  const pollMs = params.pollMs ?? 50;
+  const sleep = params.sleep ?? ((delayMs: number) => new Promise<void>((resolve) => setTimeout(resolve, delayMs)));
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const latestState = getCollaborationState(params.taskId);
+    const latestActiveHandoffId = latestState?.activeHandoffState?.handoffId;
+    if (
+      !latestState ||
+      latestState.phase !== params.previousPhase ||
+      latestState.currentOwner !== params.previousOwner ||
+      latestState.speakerToken !== params.previousSpeakerToken ||
+      latestActiveHandoffId !== params.previousActiveHandoffId
+    ) {
+      return;
+    }
+    await sleep(pollMs);
+  }
 }
 
 export function primeBotCachesForTesting(params: {
