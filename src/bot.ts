@@ -1118,6 +1118,7 @@ export function buildFeishuAgentBody(params: {
           `\n[System: Do not explicitly say '收到接力棒', '轮到我', '我来接手', or similar baton language.]` +
           `\n[System: After your contribution, stop. Do not append extra completion chatter.]` +
           `\n[System: Do not call sessions_send, sessions_spawn, subagents, or message here. Accept, reject, or ask for missing information using the hidden control block only.]` +
+          `\n[System: If you can also finish the task in this same reply, use agent_handoff_accept with completionStatus \"complete\" and finalConclusion instead of adding a separate completion turn.]` +
           `\n[System: Reply briefly, then append exactly one hidden control block with action agent_handoff_accept, agent_handoff_reject, or agent_handoff_need_info using handoffId ${activeHandoff.handoffId}, and include taskId ${collaboration.taskId}.]`;
       } else if (collaboration.isCurrentOwner) {
         messageBody +=

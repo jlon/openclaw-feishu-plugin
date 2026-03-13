@@ -48,6 +48,8 @@ export type CollaborationHandoffResponseAction = {
   taskId?: string;
   handoffId: string;
   agentId: string;
+  completionStatus?: "complete";
+  finalConclusion?: string;
 };
 
 export type CollaborationHandoffResolutionAction = {
@@ -362,6 +364,11 @@ function toHandoffResponseAction(value: unknown): CollaborationHandoffResponseAc
     taskId: typeof action.taskId === "string" ? action.taskId : undefined,
     handoffId: action.handoffId,
     agentId: action.agentId,
+    completionStatus: action.completionStatus === "complete" ? "complete" : undefined,
+    finalConclusion:
+      typeof action.finalConclusion === "string" && action.finalConclusion.trim().length > 0
+        ? action.finalConclusion.trim()
+        : undefined,
   };
 }
 
@@ -576,10 +583,10 @@ export function applyCollaborationActions(actions: CollaborationControlAction[])
       touchedStates.push(
         replaceState({
           ...state,
-          phase: "active_collab",
+          phase: action.completionStatus === "complete" ? "completed" : "active_collab",
           handoffCount: state.handoffCount + 1,
           currentOwner: action.agentId,
-          speakerToken: action.agentId,
+          speakerToken: action.completionStatus === "complete" ? undefined : action.agentId,
           activeHandoffState: undefined,
         }),
       );

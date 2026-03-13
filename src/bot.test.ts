@@ -597,8 +597,10 @@ describe("handleFeishuMessage command authorization", () => {
     ]);
 
     let dispatchCount = 0;
+    let taskId = "";
     mockDispatchReplyFromConfig.mockImplementation(async ({ ctx }: { ctx: Record<string, string> }) => {
       dispatchCount += 1;
+      taskId ||= ctx.CollaborationTaskId;
       if (dispatchCount === 1) {
         applyCollaborationActions([
           {
@@ -725,7 +727,9 @@ describe("handleFeishuMessage command authorization", () => {
     botNames.set("starrocks-sre", "Starrocks-SRE");
 
     let dispatchCount = 0;
+    let taskId = "";
     mockDispatchReplyFromConfig.mockImplementation(async ({ ctx }: { ctx: Record<string, string> }) => {
+      taskId ||= ctx.CollaborationTaskId;
       dispatchCount += 1;
       if (dispatchCount == 1) {
         applyCollaborationActions([
@@ -1237,6 +1241,179 @@ describe("handleFeishuMessage command authorization", () => {
           CollaborationIsCurrentOwner: true,
           CollaborationAllowedActions: "agent_handoff,agent_handoff_complete",
         }),
+      }),
+    );
+  });
+
+  it("does not dispatch an extra owner followup when handoff accept also completes the task", async () => {
+    mockCreateFeishuReplyDispatcher.mockImplementation((params) => ({
+      dispatcher: {
+        markComplete: vi.fn(),
+        waitForIdle: vi.fn(async () => {}),
+      },
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      _params: params,
+    }));
+    botOpenIds.set("flink-sre", "ou_flink");
+    botOpenIds.set("starrocks-sre", "ou_starrocks");
+    botNames.set("flink-sre", "Flink-SRE");
+    botNames.set("starrocks-sre", "Starrocks-SRE");
+
+    let dispatchCount = 0;
+    let taskId = "";
+    mockDispatchReplyFromConfig.mockImplementation(async ({ ctx }: { ctx: Record<string, string> }) => {
+      dispatchCount += 1;
+      taskId ||= ctx.CollaborationTaskId;
+      if (dispatchCount === 1) {
+        applyCollaborationActions([
+          {
+            action: "collab_assess",
+            taskId: ctx.CollaborationTaskId,
+            agentId: "flink-sre",
+            ownershipClaim: "owner_candidate",
+            currentFinding: "先给第一判断",
+            nextCheck: "等待另一侧补充",
+            needsWorker: false,
+          },
+        ]);
+      } else if (dispatchCount === 2) {
+        applyCollaborationActions([
+          {
+            action: "collab_assess",
+            taskId: ctx.CollaborationTaskId,
+            agentId: "starrocks-sre",
+            ownershipClaim: "supporting",
+            currentFinding: "补一层持久化视角",
+            nextCheck: "等待接棒",
+            needsWorker: false,
+          },
+        ]);
+      } else if (dispatchCount === 3) {
+        applyCollaborationActions([
+          {
+            action: "agent_handoff",
+            taskId: ctx.CollaborationTaskId,
+            handoffId: "handoff_complete_inline",
+            fromAgentId: "flink-sre",
+            targetAgentId: "starrocks-sre",
+            timeWindow: "",
+            currentFinding: "请直接形成最终结论",
+            unresolvedQuestion: "请直接形成最终结论",
+            evidencePaths: [],
+          },
+        ]);
+      } else if (dispatchCount === 4) {
+        applyCollaborationActions([
+          {
+            action: "agent_handoff_accept",
+            taskId: ctx.CollaborationTaskId,
+            handoffId: "handoff_complete_inline",
+            agentId: "starrocks-sre",
+            completionStatus: "complete",
+            finalConclusion: "最终结论",
+          },
+        ]);
+      }
+      return { queuedFinal: true, counts: { final: 1 } };
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          enabled: true,
+          defaultAccount: "flink-sre",
+          accounts: {
+            "flink-sre": {
+              enabled: true,
+              appId: "app_flink",
+              appSecret: "secret_flink",
+              groupPolicy: "open",
+              requireMention: true,
+              renderMode: "raw",
+              streaming: false,
+            },
+            "starrocks-sre": {
+              enabled: true,
+              appId: "app_starrocks",
+              appSecret: "secret_starrocks",
+              groupPolicy: "open",
+              requireMention: true,
+              renderMode: "raw",
+              streaming: false,
+            },
+          },
+        },
+      },
+      agents: {
+        list: [{ id: "flink-sre" }, { id: "starrocks-sre" }],
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-user",
+        },
+      },
+      message: {
+        message_id: "msg-peer-inline-complete",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({
+          text: '<at user_id="ou_flink">Flink-SRE</at> <at user_id="ou_starrocks">Starrocks-SRE</at> 你俩协作讨论什么是灵魂，最后形成一句结论',
+        }),
+        mentions: [
+          { key: "@_user_1", name: "Flink-SRE", id: { open_id: "ou_flink" } },
+          { key: "@_user_2", name: "Starrocks-SRE", id: { open_id: "ou_starrocks" } },
+        ],
+      },
+    };
+
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "flink-sre",
+      channel: "feishu",
+      accountId: "flink-sre",
+      sessionKey: "agent:flink-sre:feishu:group:oc-group",
+      mainSessionKey: "agent:main:main",
+      matchedBy: "explicit",
+    });
+    await handleFeishuMessage({
+      cfg,
+      event,
+      accountId: "flink-sre",
+      botOpenId: "ou_flink",
+      botName: "Flink-SRE",
+      runtime: createRuntimeEnv(),
+    });
+
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "starrocks-sre",
+      channel: "feishu",
+      accountId: "starrocks-sre",
+      sessionKey: "agent:starrocks-sre:feishu:group:oc-group",
+      mainSessionKey: "agent:main:main",
+      matchedBy: "explicit",
+    });
+    await handleFeishuMessage({
+      cfg,
+      event,
+      accountId: "starrocks-sre",
+      botOpenId: "ou_starrocks",
+      botName: "Starrocks-SRE",
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(4);
+    expect(taskId).toBeTruthy();
+    expect(getCollaborationStateForTesting(taskId)).toEqual(
+      expect.objectContaining({
+        phase: "completed",
+        currentOwner: "starrocks-sre",
+        speakerToken: undefined,
+        handoffCount: 1,
+        activeHandoffState: undefined,
       }),
     );
   });

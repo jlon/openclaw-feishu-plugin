@@ -596,6 +596,54 @@ describe("collaboration state", () => {
     expect(finalState?.activeHandoffState).toBeUndefined();
   });
 
+  it("treats handoff accept with completionStatus complete as terminal", () => {
+    const state = ensureCollaborationState({
+      chatId: "oc_group_accept_complete",
+      messageId: "msg_accept_complete",
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre"],
+      maxHops: 3,
+    });
+    applyCollaborationActions([
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "flink-sre",
+        ownershipClaim: "owner_candidate",
+      },
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "starrocks-sre",
+        ownershipClaim: "supporting",
+      },
+      {
+        action: "agent_handoff",
+        taskId: state.taskId,
+        handoffId: "handoff_accept_complete",
+        fromAgentId: "flink-sre",
+        targetAgentId: "starrocks-sre",
+        timeWindow: "",
+        currentFinding: "请给最终结论",
+        unresolvedQuestion: "请给最终结论",
+        evidencePaths: [],
+      },
+      {
+        action: "agent_handoff_accept",
+        handoffId: "handoff_accept_complete",
+        agentId: "starrocks-sre",
+        completionStatus: "complete",
+        finalConclusion: "最终结论",
+      },
+    ]);
+    const finalState = getCollaborationStateForTesting(state.taskId);
+    expect(finalState?.phase).toBe("completed");
+    expect(finalState?.currentOwner).toBe("starrocks-sre");
+    expect(finalState?.speakerToken).toBeUndefined();
+    expect(finalState?.handoffCount).toBe(1);
+    expect(finalState?.activeHandoffState).toBeUndefined();
+  });
+
   it("lets the source owner cancel or reassign while handoff is awaiting acceptance", () => {
     const state = ensureCollaborationState({
       chatId: "oc_group_1",
