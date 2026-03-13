@@ -1045,6 +1045,9 @@ export function buildFeishuAgentBody(params: {
     const isScriptedPeer =
       collaboration.mode === "peer_collab" && collaboration.protocol === "scripted_peer";
     const recentVisibleTurns = collaboration.recentVisibleTurns ?? [];
+    const ownPreviousVisibleTurn = agentId
+      ? [...recentVisibleTurns].reverse().find((turn) => turn.agentId === agentId)?.text
+      : undefined;
     messageBody +=
       `\n\n[System: Collaboration task ${collaboration.taskId}. ` +
       `Mode=${collaboration.mode}. Phase=${collaboration.phase}. Participants=${collaboration.participants.join(", ")}. ` +
@@ -1062,6 +1065,11 @@ export function buildFeishuAgentBody(params: {
       messageBody +=
         `\n[System: Continue from the latest visible collaboration turns instead of restarting from the original user request.]` +
         `\n[System: RecentVisibleTurns=${recentTurns}]`;
+    }
+    if (ownPreviousVisibleTurn) {
+      messageBody +=
+        `\n[System: YourPreviousVisibleTurn=${ownPreviousVisibleTurn.replace(/\s+/g, " ").trim()}]` +
+        `\n[System: Stay consistent with YourPreviousVisibleTurn unless you explicitly refine or revise it.]`;
     }
     if (collaboration.phase === "initial_assessment" && collaboration.mode === "peer_collab" && agentId) {
       if (isScriptedPeer) {
@@ -1096,6 +1104,7 @@ export function buildFeishuAgentBody(params: {
             messageBody +=
               `\n[System: You are the current scripted speaker.]` +
               `\n[System: Read RecentVisibleTurns first and continue from the latest visible point made by another participant instead of restarting the discussion.]` +
+              `\n[System: Build on your role's earlier line if YourPreviousVisibleTurn exists; do not act as if you have amnesia.]` +
               `\n[System: Visible reply should add exactly one deeper point from your own role in one or two short sentences.]` +
               `\n[System: If you naturally reference the next participant's domain, keep it implicit and brief. Do not say '收到接力棒', '轮到你', '轮到我', '我来接手', or similar baton language.]` +
               `\n[System: Do not append any hidden control block. After your contribution, stop.]`;
@@ -1160,6 +1169,7 @@ export function buildFeishuAgentBody(params: {
         }
         messageBody +=
           `\n[System: Read RecentVisibleTurns first and continue from the latest visible point instead of restating the discussion from the beginning.]` +
+          `\n[System: If YourPreviousVisibleTurn exists, stay consistent with it unless you explicitly revise your own view.]` +
           `\n[System: Visible reply should continue naturally from your own role in one or two short sentences before the hidden control block.]` +
           `\n[System: Do not explicitly say '收到接力棒', '轮到我', '我来接手', or similar baton language.]` +
           `\n[System: After your contribution, stop. Do not append extra completion chatter.]` +
@@ -1656,6 +1666,10 @@ export async function handleFeishuMessage(params: {
             agentId: normalizedAgentId,
           })
         : undefined;
+      const collaborationOwnLastVisibleTurn = collaboration
+        ? [...collaboration.recentVisibleTurns].reverse().find((turn) => turn.agentId === normalizedAgentId)
+            ?.text
+        : undefined;
       const baseCtx =
         options?.mentionTargetsOverride === undefined &&
         options?.visibleMentionTargetsOverride === undefined
@@ -1757,6 +1771,7 @@ export async function handleFeishuMessage(params: {
                 .map((turn) => `${turn.agentId}: ${turn.text}`)
                 .join("\n")
             : undefined,
+        CollaborationOwnLastVisibleTurn: collaborationOwnLastVisibleTurn,
         ...mediaPayload,
       });
     };

@@ -266,6 +266,8 @@ describe("buildFeishuAgentBody", () => {
     expect(body).toContain(
       "RecentVisibleTurns=flink-sre: 灵魂像持续的身份认同。 | starrocks-sre: 还得补持久化和恢复。",
     );
+    expect(body).toContain("YourPreviousVisibleTurn=还得补持久化和恢复。");
+    expect(body).toContain("do not act as if you have amnesia");
     expect(body).toContain(
       "Read RecentVisibleTurns first and continue from the latest visible point made by another participant instead of restarting the discussion.",
     );
@@ -2063,6 +2065,7 @@ describe("handleFeishuMessage command authorization", () => {
         CollaborationHandoffCount: 0,
         CollaborationMaxHops: 2,
         CollaborationRecentTurns: undefined,
+        CollaborationOwnLastVisibleTurn: undefined,
       }),
     );
   });
