@@ -905,6 +905,14 @@ export function buildBroadcastSessionKey(
   return baseSessionKey;
 }
 
+export function buildCollaborationSessionKey(baseSessionKey: string, taskId?: string): string {
+  if (!taskId) {
+    return baseSessionKey;
+  }
+  const suffix = `:task:${taskId}`;
+  return baseSessionKey.endsWith(suffix) ? baseSessionKey : `${baseSessionKey}${suffix}`;
+}
+
 /**
  * Build media payload for inbound context.
  * Similar to Discord's buildDiscordMediaPayload().
@@ -1661,6 +1669,10 @@ export async function handleFeishuMessage(params: {
       ) => {
       const normalizedAgentId = normalizeAgentId(agentIdForBody);
       const effectiveCollaborationState = options?.collaborationStateOverride ?? collaborationState;
+      const effectiveSessionKey = buildCollaborationSessionKey(
+        agentSessionKey,
+        effectiveCollaborationState?.taskId,
+      );
       const collaboration: CollaborationRuntimeContext | undefined = effectiveCollaborationState
         ? buildCollaborationRuntimeContext({
             state: effectiveCollaborationState,
@@ -1729,7 +1741,7 @@ export async function handleFeishuMessage(params: {
         CommandBody: ctx.content,
         From: feishuFrom,
         To: feishuTo,
-        SessionKey: agentSessionKey,
+        SessionKey: effectiveSessionKey,
         AccountId: agentAccountId,
         ChatType: isGroup ? "group" : "direct",
         GroupSubject: isGroup ? ctx.chatId : undefined,
@@ -1883,14 +1895,17 @@ export async function handleFeishuMessage(params: {
       const targetAgentId = activeHandoff.targetAgentId;
       const activeHandoffId = activeHandoff.handoffId;
       const targetAccountId = resolveHandoffTargetAccountId(targetAgentId);
-      const targetSessionKey = core.channel.routing.buildAgentSessionKey({
-        agentId: targetAgentId,
-        channel: "feishu",
-        peer: {
-          kind: isGroup ? "group" : "direct",
-          id: peerId,
-        },
-      });
+      const targetSessionKey = buildCollaborationSessionKey(
+        core.channel.routing.buildAgentSessionKey({
+          agentId: targetAgentId,
+          channel: "feishu",
+          peer: {
+            kind: isGroup ? "group" : "direct",
+            id: peerId,
+          },
+        }),
+        latestState.taskId,
+      );
       const targetCtxPayload = buildCtxPayloadForAgent(
         targetSessionKey,
         targetAccountId,
@@ -2004,14 +2019,17 @@ export async function handleFeishuMessage(params: {
         claimedState,
         ownerAgentId,
       );
-      const ownerSessionKey = core.channel.routing.buildAgentSessionKey({
-        agentId: ownerAgentId,
-        channel: "feishu",
-        peer: {
-          kind: isGroup ? "group" : "direct",
-          id: peerId,
-        },
-      });
+      const ownerSessionKey = buildCollaborationSessionKey(
+        core.channel.routing.buildAgentSessionKey({
+          agentId: ownerAgentId,
+          channel: "feishu",
+          peer: {
+            kind: isGroup ? "group" : "direct",
+            id: peerId,
+          },
+        }),
+        claimedState.taskId,
+      );
       const ownerCtxPayload = buildCtxPayloadForAgent(
         ownerSessionKey,
         ownerAccountId,
@@ -2116,14 +2134,17 @@ export async function handleFeishuMessage(params: {
       }
       const dispatchTarget = async (targetAgentId: string) => {
         const targetAccountId = resolveHandoffTargetAccountId(targetAgentId);
-        const targetSessionKey = core.channel.routing.buildAgentSessionKey({
-          agentId: targetAgentId,
-          channel: "feishu",
-          peer: {
-            kind: isGroup ? "group" : "direct",
-            id: peerId,
-          },
-        });
+        const targetSessionKey = buildCollaborationSessionKey(
+          core.channel.routing.buildAgentSessionKey({
+            agentId: targetAgentId,
+            channel: "feishu",
+            peer: {
+              kind: isGroup ? "group" : "direct",
+              id: peerId,
+            },
+          }),
+          claim.state.taskId,
+        );
         const targetCtxPayload = buildCtxPayloadForAgent(
           targetSessionKey,
           targetAccountId,
@@ -2357,8 +2378,12 @@ export async function handleFeishuMessage(params: {
           : collaborationState?.mode === "peer_collab"
             ? buildPeerCollabVisibleMentionTargets(collaborationState, route.agentId)
             : undefined;
-      const ctxPayload = buildCtxPayloadForAgent(
+      const effectiveRouteSessionKey = buildCollaborationSessionKey(
         route.sessionKey,
+        collaborationState?.taskId,
+      );
+      const ctxPayload = buildCtxPayloadForAgent(
+        effectiveRouteSessionKey,
         route.accountId,
         ctx.mentionedBot,
         route.agentId,
@@ -2388,7 +2413,7 @@ export async function handleFeishuMessage(params: {
       const previousCollaborationPhase = collaborationState?.phase;
       const previousCollaborationOwner = collaborationState?.currentOwner;
       const previousCollaborationSpeakerToken = collaborationState?.speakerToken;
-      log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
+      log(`feishu[${account.accountId}]: dispatching to agent (session=${effectiveRouteSessionKey})`);
       const { queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
         dispatcher,
         onSettled: () => {

@@ -826,6 +826,13 @@ describe("handleFeishuMessage command authorization", () => {
         }),
       }),
     );
+    const collaborationSessionKeys = mockFinalizeInboundContext.mock.calls
+      .map((call: unknown[]) => call[0] as { SessionKey?: string; CollaborationTaskId?: string })
+      .filter((ctx) => typeof ctx.CollaborationTaskId === "string");
+    expect(collaborationSessionKeys.length).toBeGreaterThan(0);
+    for (const ctx of collaborationSessionKeys) {
+      expect(ctx.SessionKey).toContain(`:task:${ctx.CollaborationTaskId}`);
+    }
   });
 
   it("dispatches handoff accept and next-owner followup after an owner hands off", async () => {
@@ -1192,6 +1199,13 @@ describe("handleFeishuMessage command authorization", () => {
     expect(ownerKickoffParams?.visibleMentionTargets).toEqual([
       expect.objectContaining({ openId: "ou_starrocks", name: "Starrocks-SRE" }),
     ]);
+    const collaborationSessionKeys = mockFinalizeInboundContext.mock.calls
+      .map((call: unknown[]) => call[0] as { SessionKey?: string; CollaborationTaskId?: string })
+      .filter((ctx) => typeof ctx.CollaborationTaskId === "string");
+    expect(collaborationSessionKeys.length).toBeGreaterThan(0);
+    for (const ctx of collaborationSessionKeys) {
+      expect(ctx.SessionKey).toContain(`:task:${ctx.CollaborationTaskId}`);
+    }
   });
 
   it("auto-advances scripted peer collaboration turns without hidden control blocks", async () => {
@@ -2241,6 +2255,13 @@ describe("handleFeishuMessage command authorization", () => {
     expect(starrocksParams.visibleMentionTargets).toEqual([
       expect.objectContaining({ openId: "ou_main", name: "首席大管家" }),
     ]);
+    const collaborationSessionKeys = mockFinalizeInboundContext.mock.calls
+      .map((call: unknown[]) => call[0] as { SessionKey?: string; CollaborationTaskId?: string })
+      .filter((ctx) => typeof ctx.CollaborationTaskId === "string");
+    expect(collaborationSessionKeys.length).toBeGreaterThan(0);
+    for (const ctx of collaborationSessionKeys) {
+      expect(ctx.SessionKey).toContain(`:task:${ctx.CollaborationTaskId}`);
+    }
   });
 
   it("uses authorizer resolution instead of hardcoded CommandAuthorized=true", async () => {
