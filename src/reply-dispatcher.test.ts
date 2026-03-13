@@ -231,6 +231,52 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("forces plain non-streaming delivery for collaboration-managed turns", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+      collaborationTaskId: "task_demo",
+      visibleMentionTargets: [
+        {
+          openId: "ou_demo",
+          name: "Starrocks-SRE",
+          key: "@visible_starrocks",
+        },
+      ],
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.deliver({ text: "```md\n协作中的 markdown 内容\n```" }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(0);
+    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "```md\n协作中的 markdown 内容\n```",
+        mentions: [
+          expect.objectContaining({
+            openId: "ou_demo",
+            name: "Starrocks-SRE",
+          }),
+        ],
+      }),
+    );
+  });
+
   it("suppresses internal block payload delivery", async () => {
     createFeishuReplyDispatcher({
       cfg: {} as never,
