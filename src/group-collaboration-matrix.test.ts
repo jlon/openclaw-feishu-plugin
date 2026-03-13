@@ -247,6 +247,46 @@ describe("group collaboration matrix", () => {
     );
   });
 
+  it("10b. explicit #协作 overrides direct-reply phrasing", () => {
+    const event = makeEvent({
+      text: "@Flink-SRE @Starrocks-SRE #协作 你俩各说一句后继续往下讨论",
+      mentions: [
+        { openId: "ou_flink", name: "Flink-SRE", key: "@_user_1" },
+        { openId: "ou_sr", name: "Starrocks-SRE", key: "@_user_2" },
+      ],
+    });
+    expect(classifyGroupCoAddressMode({ event: event as any, mentionedBotCount: 2, mainMentioned: false })).toBe(
+      "peer_collab",
+    );
+  });
+
+  it("10c. explicit #直答 forces direct_reply", () => {
+    const event = makeEvent({
+      text: "@Flink-SRE @Starrocks-SRE #直答 你俩继续讨论也没关系",
+      mentions: [
+        { openId: "ou_flink", name: "Flink-SRE", key: "@_user_1" },
+        { openId: "ou_sr", name: "Starrocks-SRE", key: "@_user_2" },
+      ],
+    });
+    expect(classifyGroupCoAddressMode({ event: event as any, mentionedBotCount: 2, mainMentioned: false })).toBe(
+      "direct_reply",
+    );
+  });
+
+  it("10d. explicit #编排 forces coordinate", () => {
+    const event = makeEvent({
+      text: "@首席大管家 @Flink-SRE @Starrocks-SRE #编排 你来统一安排",
+      mentions: [
+        { openId: "ou_main", name: "首席大管家", key: "@_user_1" },
+        { openId: "ou_flink", name: "Flink-SRE", key: "@_user_2" },
+        { openId: "ou_sr", name: "Starrocks-SRE", key: "@_user_3" },
+      ],
+    });
+    expect(classifyGroupCoAddressMode({ event: event as any, mentionedBotCount: 3, mainMentioned: true })).toBe(
+      "coordinate",
+    );
+  });
+
   it("11. external bot + main direct reply does not trigger mention-forward", () => {
     const event = makeEvent({
       text: '<at user_id="ou_cloud">云上Bot</at> <at user_id="ou_main">首席大管家</at> 你俩用一句话赞美下我',
@@ -257,6 +297,20 @@ describe("group collaboration matrix", () => {
     });
     const ctx = parseFeishuMessageEvent(event as any, "ou_main", "首席大管家");
     expect(ctx.mentionTargets).toBeUndefined();
+  });
+
+  it("11b. parseFeishuMessageEvent strips explicit mode tags from content", () => {
+    const event = makeEvent({
+      text: "@Flink-SRE @Starrocks-SRE #协作 你俩讨论什么是灵魂",
+      mentions: [
+        { openId: "ou_flink", name: "Flink-SRE", key: "@_user_1" },
+        { openId: "ou_sr", name: "Starrocks-SRE", key: "@_user_2" },
+      ],
+    });
+    const ctx = parseFeishuMessageEvent(event as any, "ou_flink", "Flink-SRE");
+    expect(ctx.explicitGroupCoAddressMode).toBe("peer_collab");
+    expect(ctx.content).toContain("你俩讨论什么是灵魂");
+    expect(ctx.content).not.toContain("#协作");
   });
 
   it("12. direct-reply body tells main to answer only for itself", () => {

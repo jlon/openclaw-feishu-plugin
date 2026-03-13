@@ -18,6 +18,8 @@ export type MentionTarget = {
 
 export type GroupCoAddressMode = "none" | "direct_reply" | "peer_collab" | "coordinate";
 
+const EXPLICIT_GROUP_MODE_PATTERN = /(?:^|\s)#(直答|协作|编排)(?=\s|$)/u;
+
 const GROUP_COORDINATION_PATTERNS = [
   /安排/u,
   /派单/u,
@@ -67,6 +69,39 @@ function extractEventText(event: FeishuMessageEvent): string {
   }
 }
 
+export function extractExplicitGroupCoAddressMode(
+  text: string,
+): Exclude<GroupCoAddressMode, "none"> | undefined {
+  const match = text.match(EXPLICIT_GROUP_MODE_PATTERN);
+  if (!match) {
+    return undefined;
+  }
+  if (match[1] === "直答") {
+    return "direct_reply";
+  }
+  if (match[1] === "协作") {
+    return "peer_collab";
+  }
+  if (match[1] === "编排") {
+    return "coordinate";
+  }
+  return undefined;
+}
+
+export function stripExplicitGroupCoAddressMode(text: string): {
+  text: string;
+  explicitMode?: Exclude<GroupCoAddressMode, "none">;
+} {
+  const explicitMode = extractExplicitGroupCoAddressMode(text);
+  if (!explicitMode) {
+    return { text };
+  }
+  return {
+    text: text.replace(EXPLICIT_GROUP_MODE_PATTERN, " ").replace(/\s+/gu, " ").trim(),
+    explicitMode,
+  };
+}
+
 export function isGroupCoordinationRequest(event: FeishuMessageEvent): boolean {
   if (event.message.chat_type !== "group") {
     return false;
@@ -91,6 +126,10 @@ export function classifyGroupCoAddressMode(params: {
   const { event, mentionedBotCount, mainMentioned } = params;
   if (event.message.chat_type !== "group" || mentionedBotCount < 2) {
     return "none";
+  }
+  const explicitMode = extractExplicitGroupCoAddressMode(extractEventText(event));
+  if (explicitMode) {
+    return explicitMode;
   }
   if (mainMentioned && isGroupCoordinationRequest(event)) {
     return "coordinate";

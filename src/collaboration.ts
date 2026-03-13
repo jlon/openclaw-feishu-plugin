@@ -3,6 +3,7 @@ import type { FeishuMessageEvent } from "./bot.js";
 import type { GroupCoAddressMode } from "./mention.js";
 
 export type CollaborationMode = Extract<GroupCoAddressMode, "peer_collab" | "coordinate">;
+export type CollaborationProtocol = "legacy_handoff" | "scripted_peer";
 export type CollaborationPhase =
   | "initial_assessment"
   | "active_collab"
@@ -89,12 +90,16 @@ export type CollaborationState = {
   stateKey: string;
   taskId: string;
   mode: CollaborationMode;
+  protocol?: CollaborationProtocol;
   phase: CollaborationPhase;
   participants: string[];
   maxHops: number;
   handoffCount: number;
   currentOwner?: string;
   speakerToken?: string;
+  scriptedTurnIndex?: number;
+  scriptedTotalTurns?: number;
+  lastSpeakerId?: string;
   coordinateDispatchedAgents: string[];
   assessments: Record<string, CollaborationAssessment>;
   activeHandoffState?: CollaborationActiveHandoffState;
@@ -104,12 +109,16 @@ export type CollaborationState = {
 export type CollaborationRuntimeContext = {
   taskId: string;
   mode: CollaborationMode;
+  protocol?: CollaborationProtocol;
   phase: CollaborationPhase;
   participants: string[];
   maxHops: number;
   handoffCount: number;
   currentOwner?: string;
   speakerToken?: string;
+  scriptedTurnIndex?: number;
+  scriptedTotalTurns?: number;
+  isFinalScriptedTurn?: boolean;
   isCurrentOwner: boolean;
   activeHandoff?: CollaborationActiveHandoffState;
   allowedActions: CollaborationAllowedAction[];
@@ -203,6 +212,7 @@ export function ensureCollaborationState(params: {
   mode: CollaborationMode;
   participants: string[];
   maxHops: number;
+  explicitMode?: Exclude<GroupCoAddressMode, "none">;
 }): CollaborationState {
   sweepExpiredCollaborationStates();
   const stateKey = buildCollaborationStateKey(params);
@@ -219,10 +229,15 @@ export function ensureCollaborationState(params: {
     return nextState;
   }
   const taskId = buildCollaborationTaskId(params);
+  const protocol =
+    params.mode === "peer_collab" && params.explicitMode === "peer_collab"
+      ? "scripted_peer"
+      : "legacy_handoff";
   const nextState: CollaborationState = {
     stateKey,
     taskId,
     mode: params.mode,
+    protocol,
     phase: params.mode === "coordinate" ? "active_collab" : "initial_assessment",
     participants: normalizedParticipants,
     maxHops: params.maxHops,
@@ -236,6 +251,81 @@ export function ensureCollaborationState(params: {
   collaborationStateByKey.set(stateKey, nextState);
   collaborationStateByTaskId.set(taskId, nextState);
   return nextState;
+}
+
+export function markScriptedPeerAssessmentComplete(
+  taskId: string,
+  agentId: string,
+): CollaborationState | undefined {
+  const state = collaborationStateByTaskId.get(taskId);
+  if (
+    !state ||
+    state.protocol !== "scripted_peer" ||
+    state.phase !== "initial_assessment" ||
+    !state.participants.includes(agentId)
+  ) {
+    return state;
+  }
+  const nextState = replaceState({
+    ...state,
+    assessments: {
+      ...state.assessments,
+      [agentId]: {
+        agentId,
+        ownershipClaim: agentId === state.participants[0] ? "owner_candidate" : "supporting",
+      },
+    },
+  });
+  const allAssessed = nextState.participants.every((participant) => Boolean(nextState.assessments[participant]));
+  if (!allAssessed) {
+    return nextState;
+  }
+  return replaceState({
+    ...nextState,
+    phase: "active_collab",
+    currentOwner: nextState.participants[0],
+    speakerToken: nextState.participants[0],
+    scriptedTurnIndex: 0,
+    scriptedTotalTurns: Math.max(1, nextState.maxHops + 1),
+  });
+}
+
+export function advanceScriptedPeerTurn(
+  taskId: string,
+  agentId: string,
+): CollaborationState | undefined {
+  const state = collaborationStateByTaskId.get(taskId);
+  if (
+    !state ||
+    state.protocol !== "scripted_peer" ||
+    state.phase !== "active_collab" ||
+    state.currentOwner !== agentId
+  ) {
+    return state;
+  }
+  const nextTurnIndex = (state.scriptedTurnIndex ?? 0) + 1;
+  const totalTurns = state.scriptedTotalTurns ?? Math.max(1, state.maxHops + 1);
+  if (nextTurnIndex >= totalTurns) {
+    return replaceState({
+      ...state,
+      phase: "completed",
+      speakerToken: undefined,
+      lastSpeakerId: agentId,
+      scriptedTurnIndex: nextTurnIndex,
+      scriptedTotalTurns: totalTurns,
+    });
+  }
+  const currentOwnerIndex = state.participants.indexOf(agentId);
+  const nextOwner =
+    state.participants[(currentOwnerIndex + 1 + state.participants.length) % state.participants.length];
+  return replaceState({
+    ...state,
+    currentOwner: nextOwner,
+    speakerToken: nextOwner,
+    lastSpeakerId: agentId,
+    scriptedTurnIndex: nextTurnIndex,
+    scriptedTotalTurns: totalTurns,
+  });
 }
 
 function removeCollaborationState(state: CollaborationState): void {
@@ -657,7 +747,8 @@ export function buildCollaborationRuntimeContext(params: {
   const isCurrentOwner = params.state.currentOwner === params.agentId;
   const activeHandoff = params.state.activeHandoffState;
   const allowedActions: CollaborationAllowedAction[] = [];
-  if (params.state.mode === "peer_collab" && params.state.phase === "initial_assessment") {
+  if (params.state.protocol === "scripted_peer") {
+  } else if (params.state.mode === "peer_collab" && params.state.phase === "initial_assessment") {
     allowedActions.push("collab_assess");
   } else if (params.state.phase === "active_collab" && isCurrentOwner) {
     if (params.state.handoffCount < params.state.maxHops) {
@@ -681,12 +772,22 @@ export function buildCollaborationRuntimeContext(params: {
   return {
     taskId: params.state.taskId,
     mode: params.state.mode,
+    protocol: params.state.protocol,
     phase: params.state.phase,
     participants: params.state.participants,
     maxHops: params.state.maxHops,
     handoffCount: params.state.handoffCount,
     currentOwner: params.state.currentOwner,
     speakerToken: params.state.speakerToken,
+    scriptedTurnIndex: params.state.scriptedTurnIndex,
+    scriptedTotalTurns: params.state.scriptedTotalTurns,
+    isFinalScriptedTurn:
+      params.state.protocol === "scripted_peer" &&
+      params.state.phase === "active_collab" &&
+      typeof params.state.scriptedTurnIndex === "number" &&
+      typeof params.state.scriptedTotalTurns === "number"
+        ? params.state.scriptedTurnIndex + 1 >= params.state.scriptedTotalTurns
+        : undefined,
     isCurrentOwner,
     activeHandoff,
     allowedActions,
@@ -761,6 +862,7 @@ export function resolveCollaborationStateForMessage(params: {
   mode: CollaborationMode;
   participants: string[];
   maxHops: number;
+  explicitMode?: Exclude<GroupCoAddressMode, "none">;
 }): CollaborationState {
   return ensureCollaborationState({
     chatId: params.event.message.chat_id,
@@ -770,5 +872,6 @@ export function resolveCollaborationStateForMessage(params: {
     mode: params.mode,
     participants: params.participants,
     maxHops: params.maxHops,
+    explicitMode: params.explicitMode,
   });
 }

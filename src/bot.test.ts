@@ -192,6 +192,73 @@ describe("buildFeishuAgentBody", () => {
     );
   });
 
+  it("uses scripted peer guidance without hidden control blocks for explicit collaboration", () => {
+    const body = buildFeishuAgentBody({
+      ctx: {
+        content: "user: @Flink-SRE @Starrocks-SRE 你俩讨论什么是灵魂",
+        senderName: "user",
+        senderOpenId: "ou_sender",
+        messageId: "msg-scripted-peer-initial",
+        hasAnyMention: true,
+        groupCoAddressMode: "peer_collab",
+        collaboration: {
+          taskId: "task_scripted_peer_initial",
+          mode: "peer_collab",
+          protocol: "scripted_peer",
+          phase: "initial_assessment",
+          participants: ["flink-sre", "starrocks-sre"],
+          handoffCount: 0,
+          maxHops: 2,
+          isCurrentOwner: false,
+          allowedActions: [],
+        },
+      },
+      botOpenId: "ou_flink",
+      autoMentionTargets: false,
+      agentId: "flink-sre",
+    });
+
+    expect(body).toContain("This is a scripted peer collaboration round.");
+    expect(body).not.toContain('"action":"collab_assess"');
+    expect(body).not.toContain("hidden control block");
+  });
+
+  it("tells the final scripted peer speaker to synthesize and stop", () => {
+    const body = buildFeishuAgentBody({
+      ctx: {
+        content: "user: @Flink-SRE @Starrocks-SRE 你俩讨论什么是灵魂",
+        senderName: "user",
+        senderOpenId: "ou_sender",
+        messageId: "msg-scripted-peer-final",
+        hasAnyMention: true,
+        groupCoAddressMode: "peer_collab",
+        collaboration: {
+          taskId: "task_scripted_peer_final",
+          mode: "peer_collab",
+          protocol: "scripted_peer",
+          phase: "active_collab",
+          participants: ["flink-sre", "starrocks-sre"],
+          currentOwner: "starrocks-sre",
+          speakerToken: "starrocks-sre",
+          handoffCount: 1,
+          maxHops: 2,
+          scriptedTurnIndex: 2,
+          scriptedTotalTurns: 3,
+          isFinalScriptedTurn: true,
+          isCurrentOwner: true,
+          allowedActions: [],
+        },
+      },
+      botOpenId: "ou_starrocks",
+      autoMentionTargets: false,
+      agentId: "starrocks-sre",
+    });
+
+    expect(body).toContain("This is the final scripted peer turn.");
+    expect(body).toContain("synthesize both sides into one concise concluding sentence");
+    expect(body).not.toContain('"action":"agent_handoff"');
+  });
+
   it("forces direct reply turns to stay single-shot and non-delegating", () => {
     const body = buildFeishuAgentBody({
       ctx: {

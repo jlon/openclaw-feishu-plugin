@@ -34,6 +34,39 @@
 - 流式回复去重、内部控制块剥离、错误 `@` 清洗
 - 群参与者视图 `feishu_chat(action="participants")`
 
+## 推荐使用方式：显式模式优先
+
+这版插件已经保留自然语言兼容判定，但生产主路径不再建议依赖“让系统猜这次是不是协作”。
+
+推荐直接在群消息里声明模式：
+
+- `#直答`
+- `#协作`
+- `#编排`
+
+最小例子：
+
+```text
+@Flink-SRE @Starrocks-SRE #直答 你俩各用一句话说下你们先看什么
+```
+
+```text
+@Flink-SRE @Starrocks-SRE #协作 你俩讨论什么是灵魂，先各自判断，再互相补充，最后形成一句结论
+```
+
+```text
+@首席大管家 @Flink-SRE @Starrocks-SRE #编排 帮我安排并汇总这次排查
+```
+
+原因只有一句：
+- 自然语言是开放集
+- 协作模式是控制协议
+- 用开放集去驱动控制协议，本身就不稳
+
+所以当前最佳实践是：
+1. 显式模式作为生产主路径
+2. 自然语言分类只作为兼容层
+
 ## 架构图
 
 ```mermaid
@@ -152,7 +185,7 @@ flowchart LR
 ### 场景 1：共同点名，轻量直答
 
 ```text
-@Flink-SRE @Starrocks-SRE 一个字描述下 john
+@Flink-SRE @Starrocks-SRE #直答 一个字描述下 john
 ```
 
 预期：
@@ -162,7 +195,7 @@ flowchart LR
 ### 场景 2：多个专业 Agent 协作排查
 
 ```text
-@Flink-SRE @Starrocks-SRE 你俩一起看下这条链路，先各自说判断，再互相补充
+@Flink-SRE @Starrocks-SRE #协作 你俩一起看下这条链路，先各自说判断，再互相补充
 ```
 
 预期：
@@ -174,7 +207,7 @@ flowchart LR
 ### 场景 3：main 编排并收口
 
 ```text
-@首席大管家 @Flink-SRE @Starrocks-SRE 帮我安排并汇总这次排查
+@首席大管家 @Flink-SRE @Starrocks-SRE #编排 帮我安排并汇总这次排查
 ```
 
 预期：
@@ -213,6 +246,7 @@ flowchart LR
 - 新增了 `feishu_chat(action="participants")` 视图，用来回答“这个群里有哪些可见成员和内部机器人参与者”
 - 群协作协议新增了 `direct_reply / peer_collab / coordinate` 行为分流，但这不是新的配置字段，而是运行时行为增强
 - 新增了 `channels.feishu.collaboration.maxHops`，用来限制 `peer_collab / coordinate` 下的结构化接棒深度
+- 新增了显式模式标签 `#直答 / #协作 / #编排`，用于稳定驱动群协作协议；未使用标签时仍保留自然语言兼容层
 
 ### 持续下钻与 `maxHops`
 
@@ -279,17 +313,27 @@ flowchart LR
 - 共同点名多个 Agent，但问题只是轻量直答
 - 每个被点名 Agent 只代表自己回答
 - 不创建任务，不发生 handoff
+- 推荐触发方式：`@A @B #直答 ...`
 
 ### 3. `peer_collab`
 - 同时点名多个内部专业 Agent，并要求一起看、互相补充、继续讨论
 - 会创建协作任务
 - 允许 owner、handoff、accept/reject/need_info/complete
 - 用于“多个专业 Agent 受控多轮协作”
+- 推荐触发方式：`@A @B #协作 ...`
 
 ### 4. `coordinate`
 - 明确要求 `main` 安排、协调、汇总、拉通
 - 只有 `main` 处理原始群消息
 - 其他 Agent 通过内部协作参与
+- 推荐触发方式：`@main @A @B #编排 ...`
+
+### 5. 自然语言兼容层
+- `@main + 安排/协调/汇总` 倾向 `coordinate`
+- 明显轻量直答句式倾向 `direct_reply`
+- 其余多 bot 共同点名倾向 `peer_collab`
+
+这条路径保留是为了兼容历史用法，不承诺和显式模式一样稳定。
 
 更细的协议细节见：
 - [能力与兼容性](docs/01-能力与兼容性.md)
