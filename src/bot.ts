@@ -1995,6 +1995,29 @@ export async function handleFeishuMessage(params: {
               }),
           }),
       });
+      if (latestState.protocol === "scripted_peer") {
+        const stateAfterDispatch = getCollaborationState(latestState.taskId);
+        const latestActiveHandoffId = stateAfterDispatch?.activeHandoffState?.handoffId;
+        const stateUnchanged =
+          stateAfterDispatch &&
+          stateAfterDispatch.protocol === "scripted_peer" &&
+          stateAfterDispatch.phase === latestState.phase &&
+          stateAfterDispatch.currentOwner === latestState.currentOwner &&
+          stateAfterDispatch.speakerToken === latestState.speakerToken &&
+          latestActiveHandoffId === previousHandoffId;
+        if (stateUnchanged) {
+          const advancedState = advanceScriptedPeerTurn(latestState.taskId, ownerAgentId);
+          if (!advancedState || advancedState.phase === "completed") {
+            return;
+          }
+          await maybeDispatchCurrentOwnerFollowup({
+            previousPhase: latestState.phase,
+            previousOwner: latestState.currentOwner,
+            previousSpeakerToken: latestState.speakerToken,
+          });
+          return;
+        }
+      }
       await waitForCollaborationStateChange({
         taskId: latestState.taskId,
         previousPhase,
