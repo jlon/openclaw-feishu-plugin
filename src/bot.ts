@@ -1231,6 +1231,7 @@ export async function handleFeishuMessage(params: {
       ctx = {
         ...ctx,
         groupCoAddressMode,
+        groupCoAddressScope: groupIntent.scope,
         groupCoAddressParticipants: effectiveGroupParticipants,
       };
       if (groupCoAddressMode === "peer_collab" || groupCoAddressMode === "coordinate") {
@@ -1732,6 +1733,7 @@ export async function handleFeishuMessage(params: {
         AccountId: agentAccountId,
         ChatType: isGroup ? "group" : "direct",
         GroupSubject: isGroup ? ctx.chatId : undefined,
+        GroupCoAddressScope: ctx.groupCoAddressScope,
         SenderName:
           ctx.senderName && ctx.senderName.trim() !== ctx.senderOpenId ? ctx.senderName : undefined,
         SenderId: ctx.senderOpenId,

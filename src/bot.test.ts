@@ -2588,6 +2588,11 @@ describe("handleFeishuMessage command authorization", () => {
       "msg-coordinator-collective-intro::direct-reply::starrocks-sre",
       "msg-coordinator-collective-intro",
     ]);
+    expect(directReplyCalls.map((call) => call.ctx.GroupCoAddressScope)).toEqual([
+      "all_internal",
+      "all_internal",
+      "all_internal",
+    ]);
   });
 
   it("preserves display-only visible mentions for single-agent group replies with other mentioned entities", async () => {

@@ -256,6 +256,7 @@ describe("group collaboration matrix", () => {
     expect(intent).toEqual(
       expect.objectContaining({
         mode: "peer_collab",
+        scope: "mentioned_only",
         mainMentioned: true,
         mainExplicitlyMentioned: true,
         participants: ["main", "coder"],
@@ -285,6 +286,7 @@ describe("group collaboration matrix", () => {
     expect(intent).toEqual(
       expect.objectContaining({
         mode: "direct_reply",
+        scope: "all_internal",
         mainMentioned: true,
         mainExplicitlyMentioned: true,
         rawParticipants: ["main", "coder", "flink-sre"],
@@ -563,6 +565,7 @@ describe("group collaboration matrix", () => {
     expect(intent).toEqual(
       expect.objectContaining({
         mode: "coordinate",
+        scope: "active_thread",
         participants: ["main", "flink-sre", "starrocks-sre"],
       }),
     );

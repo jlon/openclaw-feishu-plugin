@@ -6,7 +6,7 @@ import type {
   z,
 } from "./config-schema.js";
 import type { CollaborationRuntimeContext } from "./collaboration.js";
-import type { GroupCoAddressMode, MentionTarget } from "./mention.js";
+import type { GroupCoAddressMode, GroupCoAddressScope, MentionTarget } from "./mention.js";
 
 export type FeishuConfig = z.infer<typeof FeishuConfigSchema>;
 export type FeishuGroupConfig = z.infer<typeof FeishuGroupSchema>;
@@ -57,6 +57,7 @@ export type FeishuMessageContext = {
   /** Visible-only mention targets for group collaboration display. */
   visibleMentionTargets?: MentionTarget[];
   groupCoAddressMode?: GroupCoAddressMode;
+  groupCoAddressScope?: GroupCoAddressScope;
   explicitGroupCoAddressMode?: Exclude<GroupCoAddressMode, "none">;
   groupCoAddressParticipants?: string[];
   collaboration?: CollaborationRuntimeContext;

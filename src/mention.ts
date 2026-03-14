@@ -19,8 +19,10 @@ export type MentionTarget = {
 };
 
 export type GroupCoAddressMode = "none" | "direct_reply" | "peer_collab" | "coordinate";
+export type GroupCoAddressScope = "mentioned_only" | "all_internal" | "active_thread";
 export type GroupCoAddressIntent = {
   mode: GroupCoAddressMode;
+  scope: GroupCoAddressScope;
   participants: string[];
   rawParticipants: string[];
   mainMentioned: boolean;
@@ -455,6 +457,7 @@ export function resolveGroupCoAddressIntent(params: {
   });
   const mainExplicitlyMentioned =
     explicitParticipants.includes(mainAccountId) || mentionedBotAccountIds.includes(mainAccountId);
+  let scope: GroupCoAddressScope = "mentioned_only";
   let rawParticipants = normalizeParticipants(
     explicitParticipants.length > 0 ? explicitParticipants : [...mentionedBotAccountIds],
   );
@@ -467,6 +470,7 @@ export function resolveGroupCoAddressIntent(params: {
     isGroupCollectiveScopeRequest(event)
   ) {
     rawParticipants = normalizeParticipants(knownAccountIds);
+    scope = "all_internal";
   }
   if (
     rawParticipants.length === 0 &&
@@ -476,6 +480,7 @@ export function resolveGroupCoAddressIntent(params: {
     shouldResumeActiveThread
   ) {
     rawParticipants = normalizeParticipants([mainAccountId, ...activeThreadParticipants]);
+    scope = "active_thread";
   }
   let mode = classifyGroupCoAddressMode({
     event,
@@ -492,6 +497,7 @@ export function resolveGroupCoAddressIntent(params: {
   ) {
     mode = activeThreadMode;
     rawParticipants = normalizeParticipants([mainAccountId, ...activeThreadParticipants]);
+    scope = "active_thread";
   }
   const mainMentioned = mainExplicitlyMentioned || mode === "coordinate";
   let participants =
@@ -506,6 +512,7 @@ export function resolveGroupCoAddressIntent(params: {
   }
   return {
     mode,
+    scope,
     participants,
     rawParticipants,
     mainMentioned,
