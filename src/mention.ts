@@ -62,10 +62,20 @@ const GROUP_DIRECT_REPLY_PATTERNS = [
   /各自介绍自己/u,
   /自我介绍/u,
   /介绍下自己/u,
+  /互相介绍/u,
   /打个招呼/u,
   /互相打个招呼/u,
   /一个字描述/u,
   /一句话介绍/u,
+];
+
+const GROUP_COLLECTIVE_SCOPE_PATTERNS = [
+  /大家/u,
+  /所有人/u,
+  /每个人/u,
+  /你们/u,
+  /都来/u,
+  /互相/u,
 ];
 
 const GROUP_CONTINUATION_PATTERNS = [
@@ -380,6 +390,14 @@ export function isGroupContinuationRequest(event: FeishuMessageEvent): boolean {
   return GROUP_CONTINUATION_PATTERNS.some((pattern) => pattern.test(text));
 }
 
+export function isGroupCollectiveScopeRequest(event: FeishuMessageEvent): boolean {
+  if (event.message.chat_type !== "group") {
+    return false;
+  }
+  const text = extractEventText(event);
+  return GROUP_COLLECTIVE_SCOPE_PATTERNS.some((pattern) => pattern.test(text));
+}
+
 export function classifyGroupCoAddressMode(params: {
   event: FeishuMessageEvent;
   mentionedBotCount: number;
@@ -440,6 +458,16 @@ export function resolveGroupCoAddressIntent(params: {
   let rawParticipants = normalizeParticipants(
     explicitParticipants.length > 0 ? explicitParticipants : [...mentionedBotAccountIds],
   );
+  if (
+    rawParticipants.length === 1 &&
+    rawParticipants[0] === mainAccountId &&
+    mainExplicitlyMentioned &&
+    knownAccountIds.length > 1 &&
+    isGroupDirectReplyRequest(event) &&
+    isGroupCollectiveScopeRequest(event)
+  ) {
+    rawParticipants = normalizeParticipants(knownAccountIds);
+  }
   if (
     rawParticipants.length === 0 &&
     activeThreadMode &&

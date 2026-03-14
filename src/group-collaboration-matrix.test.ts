@@ -263,6 +263,36 @@ describe("group collaboration matrix", () => {
     );
   });
 
+  it("8c. coordinator-only collective introduction expands to all internal participants as direct_reply", () => {
+    const event = makeEvent({
+      text: "@首席大管家 让大家互相介绍下",
+      mentions: [{ openId: "ou_main", name: "首席大管家", key: "@_user_1" }],
+    });
+    const intent = resolveGroupIntentForEventWithActiveThread({
+      event: event as any,
+      botOpenIdMap: new Map([
+        ["main", "ou_main"],
+        ["coder", "ou_coder"],
+        ["flink-sre", "ou_flink"],
+      ]),
+      botNameMap: new Map([
+        ["main", "首席大管家"],
+        ["coder", "SoulCoder"],
+        ["flink-sre", "Flink-SRE"],
+      ]),
+      mainAccountId: "main",
+    });
+    expect(intent).toEqual(
+      expect.objectContaining({
+        mode: "direct_reply",
+        mainMentioned: true,
+        mainExplicitlyMentioned: true,
+        rawParticipants: ["main", "coder", "flink-sre"],
+        participants: ["main", "coder", "flink-sre"],
+      }),
+    );
+  });
+
   it("8c. a non-main default account acts as the coordinator raw entry", () => {
     setFeishuBotOpenIdForTesting("dispatcher", "ou_dispatcher");
     setFeishuBotOpenIdForTesting("coder", "ou_coder");

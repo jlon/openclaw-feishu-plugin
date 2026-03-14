@@ -2480,6 +2480,116 @@ describe("handleFeishuMessage command authorization", () => {
     }
   });
 
+  it("fans out coordinator-only collective direct-reply requests to all internal participants", async () => {
+    botOpenIds.set("main", "ou_main");
+    botOpenIds.set("coder", "ou_coder");
+    botOpenIds.set("starrocks-sre", "ou_starrocks");
+    botNames.set("main", "首席大管家");
+    botNames.set("coder", "SoulCoder");
+    botNames.set("starrocks-sre", "Starrocks-SRE");
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "main",
+      channel: "feishu",
+      accountId: "main",
+      sessionKey: "agent:main:feishu:group:oc-group",
+      mainSessionKey: "agent:main:main",
+      matchedBy: "explicit",
+    });
+    mockCreateFeishuReplyDispatcher.mockImplementation((params) => ({
+      dispatcher: {
+        markComplete: vi.fn(),
+        waitForIdle: vi.fn(async () => {}),
+      },
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      _params: params,
+    }));
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          defaultAccount: "main",
+          accounts: {
+            main: {
+              enabled: true,
+              appId: "app_main",
+              appSecret: "secret_main",
+              requireMention: false,
+              groupPolicy: "open",
+              renderMode: "raw",
+              streaming: false,
+            },
+            coder: {
+              enabled: true,
+              appId: "app_coder",
+              appSecret: "secret_coder",
+              requireMention: true,
+              groupPolicy: "open",
+              renderMode: "raw",
+              streaming: false,
+              name: "SoulCoder",
+            },
+            "starrocks-sre": {
+              enabled: true,
+              appId: "app_starrocks",
+              appSecret: "secret_starrocks",
+              requireMention: true,
+              groupPolicy: "open",
+              renderMode: "raw",
+              streaming: false,
+              name: "Starrocks-SRE",
+            },
+          },
+        },
+      },
+      agents: {
+        list: [{ id: "main", name: "首席大管家" }, { id: "coder", name: "SoulCoder" }, { id: "starrocks-sre", name: "Starrocks-SRE" }],
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-user",
+        },
+      },
+      message: {
+        message_id: "msg-coordinator-collective-intro",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({
+          text: '<at user_id="ou_main">首席大管家</at> 让大家互相介绍下',
+        }),
+        mentions: [{ key: "@_user_1", id: { open_id: "ou_main" }, name: "首席大管家", tenant_key: "" }],
+      },
+    };
+
+    await handleFeishuMessage({
+      cfg,
+      event,
+      accountId: "main",
+      botOpenId: "ou_main",
+      botName: "首席大管家",
+      runtime: createRuntimeEnv(),
+    });
+
+    const directReplyCalls = mockDispatchReplyFromConfig.mock.calls.map(
+      (call) => call[0] as { ctx: Record<string, string> },
+    );
+    expect(directReplyCalls).toHaveLength(3);
+    expect(directReplyCalls.map((call) => call.ctx.AccountId)).toEqual([
+      "coder",
+      "starrocks-sre",
+      "main",
+    ]);
+    expect(directReplyCalls.map((call) => call.ctx.MessageSid)).toEqual([
+      "msg-coordinator-collective-intro::direct-reply::coder",
+      "msg-coordinator-collective-intro::direct-reply::starrocks-sre",
+      "msg-coordinator-collective-intro",
+    ]);
+  });
+
   it("preserves display-only visible mentions for single-agent group replies with other mentioned entities", async () => {
     botOpenIds.set("starrocks-sre", "ou_starrocks_self");
     mockResolveAgentRoute.mockReturnValue({
