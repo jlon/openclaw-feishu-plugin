@@ -419,6 +419,96 @@ describe("group collaboration matrix", () => {
     );
   });
 
+  it("8c-1. a non-main default account expands coordinator-only collective introduction to all internal participants", () => {
+    const event = makeEvent({
+      text: "@调度员 让大家互相介绍下",
+      mentions: [{ openId: "ou_dispatcher", name: "调度员", key: "@_user_1" }],
+    });
+    const intent = resolveGroupIntentForEventWithActiveThread({
+      event: event as any,
+      botOpenIdMap: new Map([
+        ["dispatcher", "ou_dispatcher"],
+        ["coder", "ou_coder"],
+        ["flink-sre", "ou_flink"],
+      ]),
+      botNameMap: new Map([
+        ["dispatcher", "调度员"],
+        ["coder", "SoulCoder"],
+        ["flink-sre", "Flink-SRE"],
+      ]),
+      mainAccountId: "dispatcher",
+    });
+    expect(intent).toEqual(
+      expect.objectContaining({
+        mode: "direct_reply",
+        scope: "all_internal",
+        rawEntryAccountId: "dispatcher",
+        rawParticipants: ["dispatcher", "coder", "flink-sre"],
+        participants: ["dispatcher", "coder", "flink-sre"],
+      }),
+    );
+  });
+
+  it("8c-2. a non-main default account expands coordinator-only collective discussion to all internal participants", () => {
+    const event = makeEvent({
+      text: "@调度员 让大家讨论下什么是灵魂",
+      mentions: [{ openId: "ou_dispatcher", name: "调度员", key: "@_user_1" }],
+    });
+    const intent = resolveGroupIntentForEventWithActiveThread({
+      event: event as any,
+      botOpenIdMap: new Map([
+        ["dispatcher", "ou_dispatcher"],
+        ["coder", "ou_coder"],
+        ["flink-sre", "ou_flink"],
+      ]),
+      botNameMap: new Map([
+        ["dispatcher", "调度员"],
+        ["coder", "SoulCoder"],
+        ["flink-sre", "Flink-SRE"],
+      ]),
+      mainAccountId: "dispatcher",
+    });
+    expect(intent).toEqual(
+      expect.objectContaining({
+        mode: "peer_collab",
+        scope: "all_internal",
+        rawEntryAccountId: "dispatcher",
+        rawParticipants: ["dispatcher", "coder", "flink-sre"],
+        participants: ["dispatcher", "coder", "flink-sre"],
+      }),
+    );
+  });
+
+  it("8c-3. a non-main default account expands coordinator-only collective summary to all internal participants", () => {
+    const event = makeEvent({
+      text: "@调度员 让大家先看，最后给我一个结论",
+      mentions: [{ openId: "ou_dispatcher", name: "调度员", key: "@_user_1" }],
+    });
+    const intent = resolveGroupIntentForEventWithActiveThread({
+      event: event as any,
+      botOpenIdMap: new Map([
+        ["dispatcher", "ou_dispatcher"],
+        ["coder", "ou_coder"],
+        ["flink-sre", "ou_flink"],
+      ]),
+      botNameMap: new Map([
+        ["dispatcher", "调度员"],
+        ["coder", "SoulCoder"],
+        ["flink-sre", "Flink-SRE"],
+      ]),
+      mainAccountId: "dispatcher",
+    });
+    expect(intent).toEqual(
+      expect.objectContaining({
+        mode: "coordinate",
+        scope: "all_internal",
+        rawEntryAccountId: "dispatcher",
+        rawParticipants: ["dispatcher", "coder", "flink-sre"],
+        participants: ["dispatcher", "coder", "flink-sre"],
+      }),
+    );
+  });
+
   it("8a. multi-bot requests that ask for a final answer route to coordinate even without @main", () => {
     setFeishuBotOpenIdForTesting("main", "ou_main");
     setFeishuBotOpenIdForTesting("flink-sre", "ou_flink");
