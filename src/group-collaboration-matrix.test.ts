@@ -180,7 +180,7 @@ describe("group collaboration matrix", () => {
     );
   });
 
-  it("7. generic multi-specialist asks default to direct_reply without explicit collaboration mode", () => {
+  it("7. generic multi-specialist asks default to peer_collab without explicit collaboration mode", () => {
     const event = makeEvent({
       text: "@Flink-SRE @Starrocks-SRE 你俩协作排查这个链路",
       mentions: [
@@ -189,11 +189,11 @@ describe("group collaboration matrix", () => {
       ],
     });
     expect(classifyGroupCoAddressMode({ event: event as any, mentionedBotCount: 2, mainMentioned: false })).toBe(
-      "direct_reply",
+      "peer_collab",
     );
   });
 
-  it("8. main plus specialists without explicit collaboration mode stay on direct_reply under main-only raw entry", () => {
+  it("8. main plus specialists without explicit collaboration mode default to peer_collab under main-only raw entry", () => {
     setFeishuBotOpenIdForTesting("main", "ou_main");
     setFeishuBotOpenIdForTesting("flink-sre", "ou_flink");
     setFeishuBotOpenIdForTesting("starrocks-sre", "ou_sr");
@@ -206,7 +206,7 @@ describe("group collaboration matrix", () => {
       ],
     });
     expect(classifyGroupCoAddressMode({ event: event as any, mentionedBotCount: 3, mainMentioned: true })).toBe(
-      "direct_reply",
+      "peer_collab",
     );
     expect(
       shouldSkipDispatchForMentionPolicy({
@@ -224,7 +224,7 @@ describe("group collaboration matrix", () => {
     ).toBe(true);
   });
 
-  it("9. debate-style collaboration language without explicit mode stays on direct_reply", () => {
+  it("9. debate-style collaboration language without explicit mode defaults to peer_collab", () => {
     const event = makeEvent({
       text: "@SoulCoder @Starrocks-SRE 你俩辩论，怎么让自己拥有灵魂？允许多次发表意见，可以赞同或者反驳对方的观点",
       mentions: [
@@ -233,11 +233,11 @@ describe("group collaboration matrix", () => {
       ],
     });
     expect(classifyGroupCoAddressMode({ event: event as any, mentionedBotCount: 2, mainMentioned: false })).toBe(
-      "direct_reply",
+      "peer_collab",
     );
   });
 
-  it("10. implicit discussion defaults to direct_reply without explicit collaboration mode", () => {
+  it("10. implicit discussion defaults to peer_collab without explicit collaboration mode", () => {
     const event = makeEvent({
       text: "@Flink-SRE @Starrocks-SRE 你俩先判断，再继续往下聊，最后形成一句话结论",
       mentions: [
@@ -246,7 +246,7 @@ describe("group collaboration matrix", () => {
       ],
     });
     expect(classifyGroupCoAddressMode({ event: event as any, mentionedBotCount: 2, mainMentioned: false })).toBe(
-      "direct_reply",
+      "peer_collab",
     );
   });
 

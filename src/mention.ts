@@ -192,7 +192,7 @@ export function classifyGroupCoAddressMode(params: {
   if (isGroupDirectReplyRequest(event)) {
     return "direct_reply";
   }
-  return "direct_reply";
+  return "peer_collab";
 }
 
 function extractMentionTargetsFromContent(

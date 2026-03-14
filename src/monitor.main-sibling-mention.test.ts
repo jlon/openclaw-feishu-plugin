@@ -176,6 +176,44 @@ describe("shouldSkipDispatchForMentionPolicy", () => {
     ).toBe(true);
   });
 
+  it("keeps main as the hidden raw entry for natural multi-bot collaboration requests", () => {
+    setFeishuBotOpenIdForTesting("main", "ou_main");
+    setFeishuBotOpenIdForTesting("flink-sre", "ou_flink");
+    setFeishuBotOpenIdForTesting("starrocks-sre", "ou_starrocks");
+
+    const event = makeGroupEvent({
+      mentions: [
+        { openId: "ou_flink", name: "Flink-SRE", key: "@_user_1" },
+        { openId: "ou_starrocks", name: "Starrocks-SRE", key: "@_user_2" },
+      ],
+      content: JSON.stringify({
+        text: "@Flink-SRE @Starrocks-SRE 你俩讨论一下这条链路各自怎么看",
+      }),
+    });
+
+    expect(
+      shouldSkipDispatchForMentionPolicy({
+        accountId: "main",
+        currentBotOpenId: "ou_main",
+        event,
+      }),
+    ).toBe(false);
+    expect(
+      shouldSkipDispatchForMentionPolicy({
+        accountId: "flink-sre",
+        currentBotOpenId: "ou_flink",
+        event,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipDispatchForMentionPolicy({
+        accountId: "starrocks-sre",
+        currentBotOpenId: "ou_starrocks",
+        event,
+      }),
+    ).toBe(true);
+  });
+
   it("keeps main as the raw entry for explicit peer collaboration with declared specialists", () => {
     setFeishuBotOpenIdForTesting("main", "ou_main");
     setFeishuBotOpenIdForTesting("flink-sre", "ou_flink");

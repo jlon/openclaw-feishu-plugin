@@ -1280,16 +1280,24 @@ export async function handleFeishuMessage(params: {
       explicitGroupParticipants.length > 0
         ? explicitGroupParticipants.includes("main") || ctx.explicitGroupCoAddressMode === "coordinate"
         : mentionedBotAccountIds.includes("main");
-    const groupCoAddressMode = classifyGroupCoAddressMode({
+    let groupCoAddressMode = classifyGroupCoAddressMode({
       event,
       mentionedBotCount: mentionedBotAccountIds.length,
       mainMentioned,
     });
+    let effectiveGroupParticipants =
+      groupCoAddressMode === "peer_collab"
+        ? mentionedBotAccountIds.filter((participant) => normalizeAgentId(participant) !== "main")
+        : mentionedBotAccountIds;
+    if (groupCoAddressMode === "peer_collab" && effectiveGroupParticipants.length < 2) {
+      groupCoAddressMode = "direct_reply";
+      effectiveGroupParticipants = mentionedBotAccountIds;
+    }
     if (groupCoAddressMode !== "none") {
       ctx = {
         ...ctx,
         groupCoAddressMode,
-        groupCoAddressParticipants: mentionedBotAccountIds,
+        groupCoAddressParticipants: effectiveGroupParticipants,
       };
       if (groupCoAddressMode === "peer_collab" || groupCoAddressMode === "coordinate") {
         const collaborationMaxHops =
@@ -1299,7 +1307,7 @@ export async function handleFeishuMessage(params: {
         collaborationState = resolveCollaborationStateForMessage({
           event,
           mode: groupCoAddressMode,
-          participants: mentionedBotAccountIds,
+          participants: effectiveGroupParticipants,
           maxHops: collaborationMaxHops,
           explicitMode: ctx.explicitGroupCoAddressMode,
         });
@@ -1616,6 +1624,29 @@ export async function handleFeishuMessage(params: {
           );
         }
       }
+    }
+
+    if (
+      isGroup &&
+      account.accountId === "main" &&
+      ctx.groupCoAddressMode &&
+      ctx.groupCoAddressMode !== "none" &&
+      normalizeAgentId(route.agentId) !== "main"
+    ) {
+      route = {
+        ...route,
+        agentId: "main",
+        accountId: "main",
+        sessionKey: core.channel.routing.buildAgentSessionKey({
+          agentId: "main",
+          channel: "feishu",
+          peer: {
+            kind: "group",
+            id: peerId,
+          },
+          parentPeer,
+        }),
+      };
     }
 
     const preview = ctx.content.replace(/\s+/g, " ").slice(0, 160);
