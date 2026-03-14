@@ -21,7 +21,11 @@ import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { downloadMessageResourceFeishu } from "./media.js";
 import {
   extractMentionTargets,
-  resolveGroupCoAddressIntent,
+  extractMentionedBotAccountIds,
+  extractMentionedBotTokensFromText,
+  extractMentionedOpenIds,
+  normalizeBotIdentifier,
+  resolveGroupIntentForEventWithActiveThread,
   stripExplicitGroupCoAddressMode,
   isMentionForwardRequest,
   type GroupCoAddressIntent,
@@ -47,12 +51,18 @@ import {
   completeCoordinateSummary,
   getCollaborationState,
   getActiveCollaborationStateForThread,
-  markCoordinateParticipantCompleted,
   resolveCollaborationStateForMessage,
   resolveNextPeerAutoSpeaker,
   type CollaborationRuntimeContext,
   type CollaborationState,
 } from "./collaboration.js";
+
+export {
+  extractMentionedBotAccountIds,
+  extractMentionedBotTokensFromText,
+  extractMentionedOpenIds,
+  normalizeBotIdentifier,
+} from "./mention.js";
 import { botNames, botOpenIds } from "./monitor.state.js";
 import type { FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } from "./types.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
@@ -507,95 +517,6 @@ function formatSubMessageContent(content: string, contentType: string): string {
   } catch {
     return content;
   }
-}
-
-export function extractMentionedOpenIds(event: FeishuMessageEvent): string[] {
-  const mentionedOpenIds = new Set(
-    (event.message.mentions ?? [])
-      .map((mention) => mention.id.open_id?.trim())
-      .filter((openId): openId is string => Boolean(openId)),
-  );
-  if (event.message.message_type === "post") {
-    for (const openId of parsePostContent(event.message.content).mentionedOpenIds) {
-      const normalized = openId.trim();
-      if (normalized) {
-        mentionedOpenIds.add(normalized);
-      }
-    }
-  }
-  return [...mentionedOpenIds];
-}
-
-export function normalizeBotIdentifier(value: string | undefined): string {
-  return (value ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/[\s_-]+/g, "");
-}
-
-function extractPlainTextContent(event: FeishuMessageEvent): string {
-  const rawContent = event.message.content ?? "";
-  if (!rawContent) {
-    return "";
-  }
-  try {
-    if (event.message.message_type === "text") {
-      const parsed = JSON.parse(rawContent) as { text?: string };
-      return parsed.text ?? rawContent;
-    }
-    if (event.message.message_type === "post") {
-      return parsePostContent(rawContent).textContent;
-    }
-  } catch {
-    return rawContent;
-  }
-  return rawContent;
-}
-
-export function extractMentionedBotTokensFromText(event: FeishuMessageEvent): string[] {
-  const text = extractPlainTextContent(event);
-  if (!text) {
-    return [];
-  }
-  const tokens = new Set<string>();
-  for (const match of text.matchAll(/(^|\s)@([^\s@]+)/gmu)) {
-    const candidate = normalizeBotIdentifier(match[2]);
-    if (candidate) {
-      tokens.add(candidate);
-    }
-  }
-  return [...tokens];
-}
-
-export function extractMentionedBotAccountIds(params: {
-  event: FeishuMessageEvent;
-  botOpenIdMap: ReadonlyMap<string, string>;
-  botNameMap?: ReadonlyMap<string, string>;
-}): string[] {
-  const { event, botOpenIdMap, botNameMap = botNames } = params;
-  const mentionedOpenIds = extractMentionedOpenIds(event);
-  const mentionedNames = new Set(
-    [
-      ...(event.message.mentions ?? []).map((mention) => normalizeBotIdentifier(mention.name)),
-      ...extractMentionedBotTokensFromText(event),
-    ].filter((name) => Boolean(name)),
-  );
-  const mentionedAccountIds = new Set<string>();
-  for (const [accountId, openId] of botOpenIdMap.entries()) {
-    if (openId?.trim() && mentionedOpenIds.includes(openId.trim())) {
-      mentionedAccountIds.add(accountId);
-      continue;
-    }
-    const normalizedAccountId = normalizeBotIdentifier(accountId);
-    const normalizedBotName = normalizeBotIdentifier(botNameMap.get(accountId));
-    if (
-      (normalizedAccountId && mentionedNames.has(normalizedAccountId)) ||
-      (normalizedBotName && mentionedNames.has(normalizedBotName))
-    ) {
-      mentionedAccountIds.add(accountId);
-    }
-  }
-  return [...mentionedAccountIds];
 }
 
 function checkBotMentioned(event: FeishuMessageEvent, botOpenId?: string, botName?: string): boolean {
@@ -1139,7 +1060,15 @@ export function buildFeishuAgentBody(params: {
           messageBody +=
             `\n[System: Current owner is ${collaboration.currentOwner}. You are participating as a specialist in a coordinated task.]` +
             `\n[System: Visible reply should be exactly one short sentence from your own role: your first check, finding, or next step.]` +
-            `\n[System: Do not @ other participants, do not summarize for the coordinator, do not append completion chatter, do not notify main yourself, and do not emit hidden control blocks unless AllowedActions explicitly says so.]`;
+            `\n[System: Do not @ other participants, do not summarize for the coordinator, do not append completion chatter, and do not notify main yourself.]`;
+          if (collaboration.allowedActions.includes("collab_report_complete")) {
+            messageBody +=
+              `\n[System: After the visible reply, append exactly one hidden control block in this format:` +
+              `\n\`\`\`openclaw-collab` +
+              `\n{"action":"collab_report_complete","taskId":"${collaboration.taskId}","agentId":"${agentId}"}` +
+              `\n\`\`\`` +
+              `\n[System: The hidden control block will be stripped before sending to Feishu.]`;
+          }
         } else {
           messageBody +=
             `\n[System: Current owner is ${collaboration.currentOwner}. Do not act as the main speaker unless the user re-addresses you.]`;
@@ -1246,11 +1175,6 @@ export async function handleFeishuMessage(params: {
   let mentionedBotAccountIds: string[] = [];
   let groupIntent: GroupCoAddressIntent | undefined;
   if (isGroup) {
-    const detectedMentionedBotAccountIds = extractMentionedBotAccountIds({
-      event,
-      botOpenIdMap: botOpenIds,
-      botNameMap: botNames,
-    });
     const activeThreadState = getActiveCollaborationStateForThread({
       chatId: event.message.chat_id,
       rootId: event.message.root_id,
@@ -1258,17 +1182,18 @@ export async function handleFeishuMessage(params: {
     });
     groupIntent =
       precomputedGroupIntent ??
-      resolveGroupCoAddressIntent({
+      resolveGroupIntentForEventWithActiveThread({
         event,
-        mentionedBotAccountIds: detectedMentionedBotAccountIds,
-        knownAccountIds: [...botOpenIds.keys()],
+        botOpenIdMap: botOpenIds,
         botNameMap: botNames,
         mainAccountId: "main",
-        activeThreadMode:
+        activeThreadState:
           activeThreadState?.mode === "peer_collab" || activeThreadState?.mode === "coordinate"
-            ? activeThreadState.mode
+            ? {
+                mode: activeThreadState.mode,
+                participants: activeThreadState.participants,
+              }
             : undefined,
-        activeThreadParticipants: activeThreadState?.participants,
       });
     mentionedBotAccountIds = groupIntent.rawParticipants;
     const groupCoAddressMode = groupIntent.mode;
@@ -2382,7 +2307,6 @@ export async function handleFeishuMessage(params: {
                 }),
             }),
         });
-        markCoordinateParticipantCompleted(claim.state.taskId, targetAgentId);
       };
       const results = await Promise.allSettled(claim.targets.map(dispatchTarget));
       for (let i = 0; i < results.length; i++) {

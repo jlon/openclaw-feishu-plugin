@@ -315,6 +315,54 @@ describe("group collaboration matrix", () => {
     ).toBe(true);
   });
 
+  it("8c. natural thread follow-up text also resumes the active collaboration without re-mention", () => {
+    setFeishuBotOpenIdForTesting("main", "ou_main");
+    setFeishuBotOpenIdForTesting("flink-sre", "ou_flink");
+    setFeishuBotOpenIdForTesting("starrocks-sre", "ou_sr");
+    resolveCollaborationStateForMessage({
+      event: makeEvent({
+        messageId: "msg_thread_start_natural",
+        rootId: "om_root_resume_natural",
+        threadId: "omt_resume_natural",
+        text: "@Flink-SRE @Starrocks-SRE 你俩讨论一下这条链路",
+        mentions: [
+          { openId: "ou_flink", name: "Flink-SRE", key: "@_user_1" },
+          { openId: "ou_sr", name: "Starrocks-SRE", key: "@_user_2" },
+        ],
+      }) as any,
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre"],
+      maxHops: 3,
+    });
+    const followUp = makeEvent({
+      messageId: "msg_thread_followup_natural",
+      rootId: "om_root_resume_natural",
+      threadId: "omt_resume_natural",
+      text: "另外还有一个现象",
+    });
+    expect(
+      shouldSkipDispatchForMentionPolicy({
+        accountId: "main",
+        currentBotOpenId: "ou_main",
+        event: followUp as any,
+      }),
+    ).toBe(false);
+    expect(
+      shouldSkipDispatchForMentionPolicy({
+        accountId: "flink-sre",
+        currentBotOpenId: "ou_flink",
+        event: followUp as any,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipDispatchForMentionPolicy({
+        accountId: "starrocks-sre",
+        currentBotOpenId: "ou_sr",
+        event: followUp as any,
+      }),
+    ).toBe(true);
+  });
+
   it("9. debate-style collaboration language without explicit mode defaults to peer_collab", () => {
     const event = makeEvent({
       text: "@SoulCoder @Starrocks-SRE 你俩辩论，怎么让自己拥有灵魂？允许多次发表意见，可以赞同或者反驳对方的观点",

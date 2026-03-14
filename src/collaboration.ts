@@ -13,6 +13,7 @@ export type CollaborationPhase =
 export type CollaborationOwnershipClaim = "owner_candidate" | "supporting" | "observer";
 export type CollaborationAllowedAction =
   | "collab_assess"
+  | "collab_report_complete"
   | "agent_handoff"
   | "agent_handoff_cancel"
   | "agent_handoff_accept"
@@ -66,8 +67,15 @@ export type CollaborationCompleteAction = {
   agentId: string;
 };
 
+export type CollaborationReportCompleteAction = {
+  action: "collab_report_complete";
+  taskId: string;
+  agentId: string;
+};
+
 export type CollaborationControlAction =
   | CollaborationAssessAction
+  | CollaborationReportCompleteAction
   | CollaborationHandoffAction
   | CollaborationHandoffResponseAction
   | CollaborationHandoffResolutionAction
@@ -147,7 +155,11 @@ const COLLABORATION_STALE_TTL_MS = 24 * 60 * 60 * 1000;
 
 const CONTROL_BLOCK_PATTERN = /```openclaw-collab\s*([\s\S]*?)```/gu;
 const CONTROL_ACTION_NAME_PATTERN =
-  /"action"\s*:\s*"(collab_assess|agent_handoff|agent_handoff_accept|agent_handoff_reject|agent_handoff_need_info|agent_handoff_cancel|agent_handoff_expire|agent_handoff_superseded|agent_handoff_complete)"/u;
+  /"action"\s*:\s*"(collab_assess|collab_report_complete|agent_handoff|agent_handoff_accept|agent_handoff_reject|agent_handoff_need_info|agent_handoff_cancel|agent_handoff_expire|agent_handoff_superseded|agent_handoff_complete)"/u;
+const PEER_AUTO_STOP_PATTERNS = [
+  /(^|[：:，,。\s])(结论|总结|综合来看|整体来看|所以|因此|最终|一句话结论|最终结论)/u,
+  /(已经|可以)(收口|总结|得出结论)/u,
+];
 
 function hashText(input: string): string {
   return crypto.createHash("sha1").update(input).digest("hex").slice(0, 12);
@@ -357,12 +369,33 @@ function computePeerAutoTurnLimit(state: CollaborationState): number {
   return Math.max(1, state.participants.length - 1);
 }
 
+function shouldStopPeerAutoTurn(state: CollaborationState, speakerAgentId: string): boolean {
+  const lastVisibleTurn = [...state.recentVisibleTurns]
+    .reverse()
+    .find((turn) => turn.agentId === speakerAgentId);
+  return Boolean(lastVisibleTurn?.text && PEER_AUTO_STOP_PATTERNS.some((pattern) => pattern.test(lastVisibleTurn.text)));
+}
+
 export function resolveNextPeerAutoSpeaker(
   state: CollaborationState,
   speakerAgentId: string,
 ): string | undefined {
   if (state.mode !== "peer_collab" || state.participants.length <= 1) {
     return undefined;
+  }
+  if (!state.participants.includes(speakerAgentId)) {
+    return undefined;
+  }
+  const spokenAgents = new Set(
+    state.recentVisibleTurns
+      .map((turn) => turn.agentId.trim())
+      .filter(Boolean),
+  );
+  const unspokenParticipants = state.participants.filter(
+    (participant) => participant !== speakerAgentId && !spokenAgents.has(participant),
+  );
+  if (unspokenParticipants.length > 0) {
+    return unspokenParticipants[0];
   }
   const currentOwnerIndex = state.participants.indexOf(speakerAgentId);
   if (currentOwnerIndex < 0) {
@@ -386,6 +419,7 @@ export function advancePeerAutoTurn(
   }
   const nextAutoTurnCount = state.autoTurnCount + 1;
   if (
+    shouldStopPeerAutoTurn(state, agentId) ||
     nextAutoTurnCount > computePeerAutoTurnLimit(state) ||
     state.participants.length <= 1
   ) {
@@ -623,6 +657,24 @@ function toCompleteAction(value: unknown): CollaborationCompleteAction | null {
   };
 }
 
+function toReportCompleteAction(value: unknown): CollaborationReportCompleteAction | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const action = value as Record<string, unknown>;
+  if (action.action !== "collab_report_complete") {
+    return null;
+  }
+  if (typeof action.taskId !== "string" || typeof action.agentId !== "string") {
+    return null;
+  }
+  return {
+    action: "collab_report_complete",
+    taskId: action.taskId,
+    agentId: action.agentId,
+  };
+}
+
 export function parseCollaborationControlBlocks(text: string): {
   visibleText: string;
   actions: CollaborationControlAction[];
@@ -633,6 +685,7 @@ export function parseCollaborationControlBlocks(text: string): {
       const parsed = JSON.parse(rawPayload.trim()) as unknown;
       return (
         toAssessAction(parsed) ??
+        toReportCompleteAction(parsed) ??
         toHandoffAction(parsed) ??
         toHandoffResponseAction(parsed) ??
         toHandoffResolutionAction(parsed) ??
@@ -706,7 +759,24 @@ export function applyCollaborationActions(actions: CollaborationControlAction[])
     if (!state) {
       continue;
     }
-    if (action.action === "collab_assess" && !state.participants.includes(action.agentId)) {
+    if (
+      (action.action === "collab_assess" || action.action === "collab_report_complete") &&
+      !state.participants.includes(action.agentId)
+    ) {
+      continue;
+    }
+    if (action.action === "collab_report_complete") {
+      if (
+        state.mode !== "coordinate" ||
+        state.phase !== "active_collab" ||
+        action.agentId === "main"
+      ) {
+        continue;
+      }
+      const nextState = markCoordinateParticipantCompleted(state.taskId, action.agentId);
+      if (nextState) {
+        touchedStates.push(nextState);
+      }
       continue;
     }
     if (action.action === "collab_assess") {
@@ -884,6 +954,14 @@ export function buildCollaborationRuntimeContext(params: {
   const allowedActions: CollaborationAllowedAction[] = [];
   if (params.state.mode === "peer_collab" && params.state.phase === "initial_assessment") {
     allowedActions.push("collab_assess");
+  } else if (
+    params.state.mode === "coordinate" &&
+    params.state.phase === "active_collab" &&
+    !isCurrentOwner &&
+    params.agentId !== "main" &&
+    params.state.participants.includes(params.agentId)
+  ) {
+    allowedActions.push("collab_report_complete");
   } else if (
     params.state.phase === "active_collab" &&
     isCurrentOwner &&

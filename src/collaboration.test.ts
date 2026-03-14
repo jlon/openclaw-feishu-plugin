@@ -10,7 +10,6 @@ import {
   ensureCollaborationState,
   getCollaborationStateForTesting,
   getCollaborationStateStatsForTesting,
-  markCoordinateParticipantCompleted,
   parseCollaborationControlBlocks,
   recordCollaborationVisibleTurn,
   resolveNextPeerAutoSpeaker,
@@ -603,10 +602,41 @@ describe("collaboration state", () => {
       maxHops: 2,
     });
     expect(resolveNextPeerAutoSpeaker(state, "flink-sre")).toBe("starrocks-sre");
-    expect(resolveNextPeerAutoSpeaker(state, "starrocks-sre")).toBe("coder");
+    expect(resolveNextPeerAutoSpeaker(state, "starrocks-sre")).toBe("flink-sre");
   });
 
-  it("tracks coordinate participant completions and becomes summary-ready once all specialists replied", () => {
+  it("stops peer auto-turn when the latest visible turn already contains a conclusion", () => {
+    const state = ensureCollaborationState({
+      chatId: "oc_group_peer_conclusion",
+      messageId: "msg_peer_conclusion",
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre"],
+      maxHops: 3,
+    });
+    applyCollaborationActions([
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "flink-sre",
+        ownershipClaim: "owner_candidate",
+      },
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "starrocks-sre",
+        ownershipClaim: "supporting",
+      },
+    ]);
+    recordCollaborationVisibleTurn({
+      taskId: state.taskId,
+      agentId: "flink-sre",
+      text: "最终结论：灵魂是系统在故障后仍能记住自己是谁的能力。",
+    });
+    const completedState = advancePeerAutoTurn(state.taskId, "flink-sre");
+    expect(completedState?.phase).toBe("completed");
+  });
+
+  it("tracks explicit coordinate participant completion reports and becomes summary-ready once all specialists replied", () => {
     const state = ensureCollaborationState({
       chatId: "oc_group_coordinate_summary",
       messageId: "msg_coordinate_summary",
@@ -614,11 +644,23 @@ describe("collaboration state", () => {
       participants: ["main", "flink-sre", "starrocks-sre"],
       maxHops: 3,
     });
-    expect(markCoordinateParticipantCompleted(state.taskId, "flink-sre")?.coordinateCompletedAgents).toEqual([
-      "flink-sre",
+    applyCollaborationActions([
+      {
+        action: "collab_report_complete",
+        taskId: state.taskId,
+        agentId: "flink-sre",
+      },
     ]);
+    expect(getCollaborationStateForTesting(state.taskId)?.coordinateCompletedAgents).toEqual(["flink-sre"]);
     expect(claimCoordinateSummaryDispatch(state.taskId)).toBeUndefined();
-    expect(markCoordinateParticipantCompleted(state.taskId, "starrocks-sre")?.coordinateCompletedAgents).toEqual([
+    applyCollaborationActions([
+      {
+        action: "collab_report_complete",
+        taskId: state.taskId,
+        agentId: "starrocks-sre",
+      },
+    ]);
+    expect(getCollaborationStateForTesting(state.taskId)?.coordinateCompletedAgents).toEqual([
       "flink-sre",
       "starrocks-sre",
     ]);

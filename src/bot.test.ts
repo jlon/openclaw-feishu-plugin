@@ -377,7 +377,7 @@ describe("buildFeishuAgentBody", () => {
           handoffCount: 0,
           maxHops: 3,
           isCurrentOwner: false,
-          allowedActions: [],
+          allowedActions: ["collab_report_complete"],
         },
       },
       botOpenId: "ou_flink",
@@ -388,7 +388,7 @@ describe("buildFeishuAgentBody", () => {
     expect(body).toContain("participating as a specialist in a coordinated task");
     expect(body).toContain("Visible reply should be exactly one short sentence");
     expect(body).toContain("Do not @ other participants");
-    expect(body).toContain("do not emit hidden control blocks unless AllowedActions explicitly says so");
+    expect(body).toContain('"action":"collab_report_complete"');
   });
 
   it("tells the coordinator to summarize once all specialists have replied", () => {
@@ -1305,6 +1305,18 @@ describe("handleFeishuMessage command authorization", () => {
       sessionKey: "agent:main:feishu:group:oc-group",
       mainSessionKey: "agent:main:main",
       matchedBy: "explicit",
+    });
+    mockDispatchReplyFromConfig.mockImplementation(async ({ ctx }: { ctx: Record<string, string> }) => {
+      if (ctx.AccountId === "flink-sre" || ctx.AccountId === "starrocks-sre") {
+        applyCollaborationActions([
+          {
+            action: "collab_report_complete",
+            taskId: ctx.CollaborationTaskId,
+            agentId: ctx.AccountId,
+          },
+        ]);
+      }
+      return { queuedFinal: false, counts: { final: 1 } };
     });
 
     await handleFeishuMessage({

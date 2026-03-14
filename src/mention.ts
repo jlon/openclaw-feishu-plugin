@@ -1,3 +1,4 @@
+import { parsePostContent } from "./post.js";
 import type { FeishuMessageEvent } from "./bot.js";
 
 /**
@@ -105,6 +106,101 @@ export function extractEventText(event: FeishuMessageEvent): string {
   } catch {
     return raw;
   }
+}
+
+export function extractMentionedOpenIds(event: FeishuMessageEvent): string[] {
+  const mentionedOpenIds = new Set(
+    (event.message.mentions ?? [])
+      .map((mention) => mention.id.open_id?.trim())
+      .filter((value): value is string => Boolean(value)),
+  );
+  for (const openId of [...(event.message.content ?? "").matchAll(/<at\b[^>]*\buser_id="([^"]+)"/gmu)]
+    .map((match) => match[1]?.trim())
+    .filter((value): value is string => Boolean(value))) {
+    mentionedOpenIds.add(openId);
+  }
+  if (event.message.message_type === "post") {
+    for (const openId of parsePostContent(event.message.content).mentionedOpenIds) {
+      const normalized = openId.trim();
+      if (normalized) {
+        mentionedOpenIds.add(normalized);
+      }
+    }
+  }
+  return [...mentionedOpenIds];
+}
+
+export function normalizeBotIdentifier(value: string | undefined): string {
+  return (value ?? "")
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[\s_\-]+/g, "")
+    .trim();
+}
+
+function extractPlainTextContent(event: FeishuMessageEvent): string {
+  const rawContent = event.message.content ?? "";
+  if (!rawContent) {
+    return rawContent;
+  }
+  try {
+    if (event.message.message_type === "text") {
+      const parsed = JSON.parse(rawContent) as { text?: string };
+      return parsed.text ?? rawContent;
+    }
+    if (event.message.message_type === "post") {
+      return parsePostContent(rawContent).textContent;
+    }
+  } catch {
+    return rawContent;
+  }
+  return rawContent;
+}
+
+export function extractMentionedBotTokensFromText(event: FeishuMessageEvent): string[] {
+  const text = extractPlainTextContent(event);
+  if (!text) {
+    return [];
+  }
+  const tokens = new Set<string>();
+  for (const match of text.matchAll(/(^|\s)@([^\s@]+)/gmu)) {
+    const candidate = normalizeBotIdentifier(match[2]);
+    if (candidate) {
+      tokens.add(candidate);
+    }
+  }
+  return [...tokens];
+}
+
+export function extractMentionedBotAccountIds(params: {
+  event: FeishuMessageEvent;
+  botOpenIdMap: ReadonlyMap<string, string>;
+  botNameMap?: ReadonlyMap<string, string>;
+}): string[] {
+  const { event, botOpenIdMap, botNameMap } = params;
+  const mentionedOpenIds = extractMentionedOpenIds(event);
+  const mentionedNames = new Set(
+    [
+      ...(event.message.mentions ?? []).map((mention) => normalizeBotIdentifier(mention.name)),
+      ...extractMentionedBotTokensFromText(event),
+    ].filter(Boolean),
+  );
+  const mentionedAccountIds = new Set<string>();
+  for (const [accountId, openId] of botOpenIdMap.entries()) {
+    if (openId?.trim() && mentionedOpenIds.includes(openId.trim())) {
+      mentionedAccountIds.add(accountId);
+      continue;
+    }
+    const normalizedAccountId = normalizeBotIdentifier(accountId);
+    const normalizedBotName = normalizeBotIdentifier(botNameMap?.get(accountId));
+    if (
+      (normalizedAccountId && mentionedNames.has(normalizedAccountId)) ||
+      (normalizedBotName && mentionedNames.has(normalizedBotName))
+    ) {
+      mentionedAccountIds.add(accountId);
+    }
+  }
+  return [...mentionedAccountIds];
 }
 
 export function extractExplicitGroupCoAddressMode(
@@ -271,7 +367,7 @@ export function resolveGroupCoAddressIntent(params: {
     activeThreadMode &&
     activeThreadParticipants &&
     activeThreadParticipants.length > 0 &&
-    isGroupContinuationRequest(event)
+    extractEventText(event).trim().length > 0
   ) {
     mode = activeThreadMode;
     rawParticipants = normalizeParticipants([mainAccountId, ...activeThreadParticipants]);
@@ -292,6 +388,52 @@ export function resolveGroupCoAddressIntent(params: {
     mainMentioned,
     rawEntryAccountId: mode === "none" ? undefined : mainAccountId,
   };
+}
+
+export function resolveGroupIntentForEvent(params: {
+  event: FeishuMessageEvent;
+  botOpenIdMap: ReadonlyMap<string, string>;
+  botNameMap?: ReadonlyMap<string, string>;
+  mainAccountId?: string;
+  activeThreadMode?: Extract<GroupCoAddressMode, "peer_collab" | "coordinate">;
+  activeThreadParticipants?: readonly string[];
+}): GroupCoAddressIntent | undefined {
+  if (params.event.message.chat_type !== "group") {
+    return undefined;
+  }
+  return resolveGroupCoAddressIntent({
+    event: params.event,
+    mentionedBotAccountIds: extractMentionedBotAccountIds({
+      event: params.event,
+      botOpenIdMap: params.botOpenIdMap,
+      botNameMap: params.botNameMap,
+    }),
+    knownAccountIds: [...params.botOpenIdMap.keys()],
+    botNameMap: params.botNameMap,
+    mainAccountId: params.mainAccountId,
+    activeThreadMode: params.activeThreadMode,
+    activeThreadParticipants: params.activeThreadParticipants,
+  });
+}
+
+export function resolveGroupIntentForEventWithActiveThread(params: {
+  event: FeishuMessageEvent;
+  botOpenIdMap: ReadonlyMap<string, string>;
+  botNameMap?: ReadonlyMap<string, string>;
+  mainAccountId?: string;
+  activeThreadState?: {
+    mode?: Extract<GroupCoAddressMode, "peer_collab" | "coordinate">;
+    participants?: readonly string[];
+  };
+}): GroupCoAddressIntent | undefined {
+  return resolveGroupIntentForEvent({
+    event: params.event,
+    botOpenIdMap: params.botOpenIdMap,
+    botNameMap: params.botNameMap,
+    mainAccountId: params.mainAccountId,
+    activeThreadMode: params.activeThreadState?.mode,
+    activeThreadParticipants: params.activeThreadState?.participants,
+  });
 }
 
 function extractMentionTargetsFromContent(
