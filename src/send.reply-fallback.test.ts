@@ -176,4 +176,59 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
 
     expect(createMock).not.toHaveBeenCalled();
   });
+
+  it("retries transient reply transport failures for text messages", async () => {
+    const transientError = Object.assign(new Error("write EPROTO"), { code: "EPROTO" });
+    replyMock.mockRejectedValueOnce(transientError).mockResolvedValueOnce({
+      code: 0,
+      data: { message_id: "om_retry_text" },
+    });
+
+    const result = await sendMessageFeishu({
+      cfg: {} as never,
+      to: "user:ou_target",
+      text: "hello",
+      replyToMessageId: "om_parent",
+    });
+
+    expect(replyMock).toHaveBeenCalledTimes(2);
+    expect(createMock).not.toHaveBeenCalled();
+    expect(result.messageId).toBe("om_retry_text");
+  });
+
+  it("retries transient direct-send failures for text messages", async () => {
+    const transientError = Object.assign(new Error("fetch failed"), { code: "ECONNRESET" });
+    createMock.mockRejectedValueOnce(transientError).mockResolvedValueOnce({
+      code: 0,
+      data: { message_id: "om_retry_direct" },
+    });
+
+    const result = await sendMessageFeishu({
+      cfg: {} as never,
+      to: "user:ou_target",
+      text: "hello",
+    });
+
+    expect(createMock).toHaveBeenCalledTimes(2);
+    expect(result.messageId).toBe("om_retry_direct");
+  });
+
+  it("retries transient reply transport failures for card messages", async () => {
+    const transientError = Object.assign(new Error("unexpected message"), { code: "EPROTO" });
+    replyMock.mockRejectedValueOnce(transientError).mockResolvedValueOnce({
+      code: 0,
+      data: { message_id: "om_retry_card" },
+    });
+
+    const result = await sendCardFeishu({
+      cfg: {} as never,
+      to: "user:ou_target",
+      card: { schema: "2.0" },
+      replyToMessageId: "om_parent",
+    });
+
+    expect(replyMock).toHaveBeenCalledTimes(2);
+    expect(createMock).not.toHaveBeenCalled();
+    expect(result.messageId).toBe("om_retry_card");
+  });
 });

@@ -10,6 +10,21 @@ import { resolveFeishuSendTarget } from "./send-target.js";
 import type { FeishuSendResult } from "./types.js";
 
 const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003]);
+const TRANSIENT_TRANSPORT_ERROR_CODES = new Set([
+  "ECONNABORTED",
+  "ECONNRESET",
+  "EPIPE",
+  "EPROTO",
+  "ETIMEDOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+]);
+const TRANSIENT_TRANSPORT_ERROR_PATTERNS = [
+  "fetch failed",
+  "network error",
+  "socket hang up",
+  "unexpected message",
+  "write eproto",
+];
 
 function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }): boolean {
   if (response.code !== undefined && WITHDRAWN_REPLY_ERROR_CODES.has(response.code)) {
@@ -40,6 +55,33 @@ function isWithdrawnReplyError(err: unknown): boolean {
   return false;
 }
 
+function isTransientTransportError(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) {
+    return false;
+  }
+  const code = (err as { code?: unknown }).code;
+  if (typeof code === "string" && TRANSIENT_TRANSPORT_ERROR_CODES.has(code)) {
+    return true;
+  }
+  const message =
+    (typeof (err as { message?: unknown }).message === "string"
+      ? (err as { message: string }).message
+      : ""
+    ).toLowerCase() || String(err).toLowerCase();
+  return TRANSIENT_TRANSPORT_ERROR_PATTERNS.some((pattern) => message.includes(pattern));
+}
+
+async function withTransientTransportRetry<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (!isTransientTransportError(err)) {
+      throw err;
+    }
+    return fn();
+  }
+}
+
 type FeishuCreateMessageClient = {
   im: {
     message: {
@@ -62,14 +104,16 @@ async function sendFallbackDirect(
   },
   errorPrefix: string,
 ): Promise<FeishuSendResult> {
-  const response = await client.im.message.create({
-    params: { receive_id_type: params.receiveIdType },
-    data: {
-      receive_id: params.receiveId,
-      content: params.content,
-      msg_type: params.msgType,
-    },
-  });
+  const response = await withTransientTransportRetry(() =>
+    client.im.message.create({
+      params: { receive_id_type: params.receiveIdType },
+      data: {
+        receive_id: params.receiveId,
+        content: params.content,
+        msg_type: params.msgType,
+      },
+    }),
+  );
   assertFeishuMessageApiSuccess(response, errorPrefix);
   return toFeishuSendResult(response, params.receiveId);
 }
@@ -299,14 +343,16 @@ export async function sendMessageFeishu(
   if (replyToMessageId) {
     let response: { code?: number; msg?: string; data?: { message_id?: string } };
     try {
-      response = await client.im.message.reply({
-        path: { message_id: replyToMessageId },
-        data: {
-          content,
-          msg_type: msgType,
-          ...(replyInThread ? { reply_in_thread: true } : {}),
-        },
-      });
+      response = await withTransientTransportRetry(() =>
+        client.im.message.reply({
+          path: { message_id: replyToMessageId },
+          data: {
+            content,
+            msg_type: msgType,
+            ...(replyInThread ? { reply_in_thread: true } : {}),
+          },
+        }),
+      );
     } catch (err) {
       if (!isWithdrawnReplyError(err)) {
         throw err;
@@ -343,14 +389,16 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
   if (replyToMessageId) {
     let response: { code?: number; msg?: string; data?: { message_id?: string } };
     try {
-      response = await client.im.message.reply({
-        path: { message_id: replyToMessageId },
-        data: {
-          content,
-          msg_type: "interactive",
-          ...(replyInThread ? { reply_in_thread: true } : {}),
-        },
-      });
+      response = await withTransientTransportRetry(() =>
+        client.im.message.reply({
+          path: { message_id: replyToMessageId },
+          data: {
+            content,
+            msg_type: "interactive",
+            ...(replyInThread ? { reply_in_thread: true } : {}),
+          },
+        }),
+      );
     } catch (err) {
       if (!isWithdrawnReplyError(err)) {
         throw err;
