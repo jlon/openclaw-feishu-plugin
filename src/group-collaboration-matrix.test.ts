@@ -664,6 +664,82 @@ describe("group collaboration matrix", () => {
     );
   });
 
+  it("8d-1. coordinator-only collective discussion in active thread stays scoped to active participants", () => {
+    const event = makeEvent({
+      text: "@首席大管家 让大家继续讨论下这个点",
+      rootId: "om_thread_collective_root",
+      threadId: "om_thread_collective_root",
+      messageId: "msg_thread_collective_discussion",
+      mentions: [{ openId: "ou_main", name: "首席大管家", key: "@_user_1" }],
+    });
+    const intent = resolveGroupIntentForEventWithActiveThread({
+      event: event as any,
+      botOpenIdMap: new Map([
+        ["main", "ou_main"],
+        ["coder", "ou_coder"],
+        ["flink-sre", "ou_flink"],
+        ["starrocks-sre", "ou_sr"],
+      ]),
+      botNameMap: new Map([
+        ["main", "首席大管家"],
+        ["coder", "SoulCoder"],
+        ["flink-sre", "Flink-SRE"],
+        ["starrocks-sre", "Starrocks-SRE"],
+      ]),
+      mainAccountId: "main",
+      activeThreadState: {
+        mode: "peer_collab",
+        participants: ["coder", "flink-sre"],
+      },
+    });
+    expect(intent).toEqual(
+      expect.objectContaining({
+        mode: "peer_collab",
+        scope: "active_thread",
+        rawParticipants: ["main", "coder", "flink-sre"],
+        participants: ["main", "coder", "flink-sre"],
+      }),
+    );
+  });
+
+  it("8d-2. coordinator-only collective summary in active thread stays scoped to active participants", () => {
+    const event = makeEvent({
+      text: "@首席大管家 让大家先看，最后给我一个结论",
+      rootId: "om_thread_collective_summary_root",
+      threadId: "om_thread_collective_summary_root",
+      messageId: "msg_thread_collective_summary",
+      mentions: [{ openId: "ou_main", name: "首席大管家", key: "@_user_1" }],
+    });
+    const intent = resolveGroupIntentForEventWithActiveThread({
+      event: event as any,
+      botOpenIdMap: new Map([
+        ["main", "ou_main"],
+        ["coder", "ou_coder"],
+        ["flink-sre", "ou_flink"],
+        ["starrocks-sre", "ou_sr"],
+      ]),
+      botNameMap: new Map([
+        ["main", "首席大管家"],
+        ["coder", "SoulCoder"],
+        ["flink-sre", "Flink-SRE"],
+        ["starrocks-sre", "Starrocks-SRE"],
+      ]),
+      mainAccountId: "main",
+      activeThreadState: {
+        mode: "peer_collab",
+        participants: ["coder", "flink-sre"],
+      },
+    });
+    expect(intent).toEqual(
+      expect.objectContaining({
+        mode: "coordinate",
+        scope: "active_thread",
+        rawParticipants: ["main", "coder", "flink-sre"],
+        participants: ["main", "coder", "flink-sre"],
+      }),
+    );
+  });
+
   it("8e. plain non-follow-up text does not resume active thread collaboration", () => {
     const event = makeEvent({
       text: "收到",
@@ -923,6 +999,38 @@ describe("group collaboration matrix", () => {
     });
     const ctx = parseFeishuMessageEvent(event as any, "ou_main", "首席大管家");
     expect(ctx.mentionTargets).toBeUndefined();
+  });
+
+  it("11a. coordinator-only collective scope ignores external bot mentions and expands only internal participants", () => {
+    const event = makeEvent({
+      text: "@首席大管家 @云上Bot 让大家互相介绍下",
+      mentions: [
+        { openId: "ou_main", name: "首席大管家", key: "@_user_1" },
+        { openId: "ou_external", name: "云上Bot", key: "@_user_2" },
+      ],
+    });
+    const intent = resolveGroupIntentForEventWithActiveThread({
+      event: event as any,
+      botOpenIdMap: new Map([
+        ["main", "ou_main"],
+        ["coder", "ou_coder"],
+        ["flink-sre", "ou_flink"],
+      ]),
+      botNameMap: new Map([
+        ["main", "首席大管家"],
+        ["coder", "SoulCoder"],
+        ["flink-sre", "Flink-SRE"],
+      ]),
+      mainAccountId: "main",
+    });
+    expect(intent).toEqual(
+      expect.objectContaining({
+        mode: "direct_reply",
+        scope: "all_internal",
+        rawParticipants: ["main", "coder", "flink-sre"],
+        participants: ["main", "coder", "flink-sre"],
+      }),
+    );
   });
 
   it("11b. parseFeishuMessageEvent strips explicit mode tags from content", () => {

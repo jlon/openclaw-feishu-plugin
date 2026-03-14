@@ -461,13 +461,23 @@ export function resolveGroupCoAddressIntent(params: {
   let rawParticipants = normalizeParticipants(
     explicitParticipants.length > 0 ? explicitParticipants : [...mentionedBotAccountIds],
   );
-  if (
+  const coordinatorOnlyCollectiveScopeRequest =
     rawParticipants.length === 1 &&
     rawParticipants[0] === mainAccountId &&
     mainExplicitlyMentioned &&
     knownAccountIds.length > 1 &&
-    isGroupCollectiveScopeRequest(event)
+    isGroupCollectiveScopeRequest(event);
+  if (
+    coordinatorOnlyCollectiveScopeRequest &&
+    activeThreadMode &&
+    activeThreadParticipants &&
+    activeThreadParticipants.length > 0 &&
+    shouldResumeActiveThread &&
+    !isGroupDirectReplyRequest(event)
   ) {
+    rawParticipants = normalizeParticipants([mainAccountId, ...activeThreadParticipants]);
+    scope = "active_thread";
+  } else if (coordinatorOnlyCollectiveScopeRequest) {
     rawParticipants = normalizeParticipants(knownAccountIds);
     scope = "all_internal";
   }
