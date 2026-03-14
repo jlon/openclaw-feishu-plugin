@@ -24,6 +24,7 @@ import {
   resolveGroupCoAddressIntent,
   stripExplicitGroupCoAddressMode,
   isMentionForwardRequest,
+  type GroupCoAddressIntent,
   type MentionTarget,
 } from "./mention.js";
 import {
@@ -37,14 +38,16 @@ import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, sendMessageFeishu } from "./send.js";
 import {
-  advanceScriptedPeerTurn,
+  advancePeerAutoTurn,
   buildCollaborationRuntimeContext,
   claimPendingPeerAssessmentParticipants,
-  claimScriptedPeerTurnDispatch,
+  claimCurrentOwnerDispatch,
   claimPendingCoordinateParticipants,
   getCollaborationState,
   resolveCollaborationStateForMessage,
+  resolveNextPeerAutoSpeaker,
   type CollaborationRuntimeContext,
+  type CollaborationState,
 } from "./collaboration.js";
 import { botNames, botOpenIds } from "./monitor.state.js";
 import type { FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } from "./types.js";
@@ -1197,8 +1200,9 @@ export async function handleFeishuMessage(params: {
   runtime?: RuntimeEnv;
   chatHistories?: Map<string, HistoryEntry[]>;
   accountId?: string;
+  precomputedGroupIntent?: GroupCoAddressIntent;
 }): Promise<void> {
-  const { cfg, event, botOpenId, botName, runtime, chatHistories, accountId } = params;
+  const { cfg, event, botOpenId, botName, runtime, chatHistories, accountId, precomputedGroupIntent } = params;
 
   // Resolve account with merged config
   const account = resolveFeishuAccount({ cfg, accountId });
@@ -1235,13 +1239,15 @@ export async function handleFeishuMessage(params: {
       botOpenIdMap: botOpenIds,
       botNameMap: botNames,
     });
-    const groupIntent = resolveGroupCoAddressIntent({
-      event,
-      mentionedBotAccountIds: detectedMentionedBotAccountIds,
-      knownAccountIds: [...botOpenIds.keys()],
-      botNameMap: botNames,
-      mainAccountId: "main",
-    });
+    const groupIntent =
+      precomputedGroupIntent ??
+      resolveGroupCoAddressIntent({
+        event,
+        mentionedBotAccountIds: detectedMentionedBotAccountIds,
+        knownAccountIds: [...botOpenIds.keys()],
+        botNameMap: botNames,
+        mainAccountId: "main",
+      });
     mentionedBotAccountIds = groupIntent.rawParticipants;
     const groupCoAddressMode = groupIntent.mode;
     const effectiveGroupParticipants = groupIntent.participants;
@@ -1858,18 +1864,9 @@ export async function handleFeishuMessage(params: {
         if (otherParticipants.length === 0) {
           return undefined;
         }
-        if (
-          state.mode === "peer_collab" &&
-          state.phase === "active_collab" &&
-          typeof state.scriptedTurnIndex === "number" &&
-          state.handoffCount < state.maxHops
-        ) {
-          const currentIndex = state.participants.findIndex(
-            (participant) => normalizeAgentId(participant) === normalizedSpeaker,
-          );
-          if (currentIndex >= 0) {
-            const nextParticipant =
-              state.participants[(currentIndex + 1 + state.participants.length) % state.participants.length];
+        if (state.phase === "active_collab" && state.currentOwner === speakerAgentId) {
+          const nextParticipant = resolveNextPeerAutoSpeaker(state, speakerAgentId);
+          if (nextParticipant) {
             return buildVisibleMentionTargetsForAgents([nextParticipant]);
           }
         }
@@ -2175,7 +2172,7 @@ export async function handleFeishuMessage(params: {
         return;
       }
       const claimedState =
-        claimScriptedPeerTurnDispatch(latestState.taskId) ?? undefined;
+        claimCurrentOwnerDispatch(latestState.taskId) ?? undefined;
       if (!claimedState) {
         return;
       }
@@ -2258,7 +2255,7 @@ export async function handleFeishuMessage(params: {
         stateAfterDispatch.speakerToken === claimedState.speakerToken &&
         latestActiveHandoffId === previousHandoffId;
       if (stateUnchanged) {
-        const advancedState = advanceScriptedPeerTurn(claimedState.taskId, ownerAgentId);
+        const advancedState = advancePeerAutoTurn(claimedState.taskId, ownerAgentId);
         if (!advancedState || advancedState.phase === "completed") {
           return;
         }

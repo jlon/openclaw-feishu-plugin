@@ -24,6 +24,7 @@ import {
 import {
   isMentionForwardRequest,
   resolveGroupCoAddressIntent,
+  type GroupCoAddressIntent,
 } from "./mention.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 import { botNames, botOpenIds } from "./monitor.state.js";
@@ -240,6 +241,7 @@ export function shouldSkipDispatchForMentionPolicy(params: {
   currentBotOpenId?: string;
   botOpenIdMap?: ReadonlyMap<string, string>;
   botNameMap?: ReadonlyMap<string, string>;
+  groupIntentOverride?: GroupCoAddressIntent;
 }): boolean {
   const {
     accountId,
@@ -247,6 +249,7 @@ export function shouldSkipDispatchForMentionPolicy(params: {
     currentBotOpenId,
     botOpenIdMap = botOpenIds,
     botNameMap = botNames,
+    groupIntentOverride,
   } = params;
   if (event.message.chat_type !== "group") {
     return false;
@@ -256,13 +259,15 @@ export function shouldSkipDispatchForMentionPolicy(params: {
     botOpenIdMap,
     botNameMap,
   });
-  const groupIntent = resolveGroupCoAddressIntent({
-    event,
-    mentionedBotAccountIds,
-    knownAccountIds: [...botOpenIdMap.keys()],
-    botNameMap,
-    mainAccountId: PRIMARY_FEISHU_ACCOUNT_ID,
-  });
+  const groupIntent =
+    groupIntentOverride ??
+    resolveGroupCoAddressIntent({
+      event,
+      mentionedBotAccountIds,
+      knownAccountIds: [...botOpenIdMap.keys()],
+      botNameMap,
+      mainAccountId: PRIMARY_FEISHU_ACCOUNT_ID,
+    });
   const effectiveMentionedBotAccountIds = groupIntent.rawParticipants;
   const mentionedOpenIds = extractMentionedOpenIds(event);
   const currentMentionedByName = Boolean(
@@ -323,7 +328,10 @@ function registerEventHandlers(
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
   const enqueue = createChatQueue();
-  const dispatchFeishuMessage = async (event: FeishuMessageEvent) => {
+  const dispatchFeishuMessage = async (
+    event: FeishuMessageEvent,
+    precomputedGroupIntent?: GroupCoAddressIntent,
+  ) => {
     const chatId = event.message.chat_id?.trim() || "unknown";
     const task = () =>
       handleFeishuMessage({
@@ -334,6 +342,7 @@ function registerEventHandlers(
         runtime,
         chatHistories,
         accountId,
+        precomputedGroupIntent,
       });
     await enqueue(chatId, task);
   };
@@ -411,7 +420,10 @@ function registerEventHandlers(
         return;
       }
       if (entries.length === 1) {
-        await dispatchFeishuMessage(last);
+        await dispatchFeishuMessage(
+          last,
+          (last as FeishuMessageEvent & { __groupIntent?: GroupCoAddressIntent }).__groupIntent,
+        );
         return;
       }
       const dedupedEntries = dedupeFeishuDebounceEntriesByMessageId(entries);
@@ -441,7 +453,7 @@ function registerEventHandlers(
             ...dispatchEntry.message,
             mentions: mergedMentions ?? dispatchEntry.message.mentions,
           },
-        });
+        }, (dispatchEntry as FeishuMessageEvent & { __groupIntent?: GroupCoAddressIntent }).__groupIntent);
         return;
       }
       await dispatchFeishuMessage({
@@ -452,7 +464,7 @@ function registerEventHandlers(
           content: JSON.stringify({ text: combinedText }),
           mentions: mergedMentions ?? dispatchEntry.message.mentions,
         },
-      });
+      }, (dispatchEntry as FeishuMessageEvent & { __groupIntent?: GroupCoAddressIntent }).__groupIntent);
     },
     onError: (err) => {
       error(`feishu[${accountId}]: inbound debounce flush failed: ${String(err)}`);
@@ -464,11 +476,26 @@ function registerEventHandlers(
       const processMessage = async () => {
         const event = data as unknown as FeishuMessageEvent;
         const botOpenId = botOpenIds.get(accountId);
+        const groupIntent =
+          event.message.chat_type === "group"
+            ? resolveGroupCoAddressIntent({
+                event,
+                mentionedBotAccountIds: extractMentionedBotAccountIds({
+                  event,
+                  botOpenIdMap: botOpenIds,
+                  botNameMap: botNames,
+                }),
+                knownAccountIds: [...botOpenIds.keys()],
+                botNameMap: botNames,
+                mainAccountId: PRIMARY_FEISHU_ACCOUNT_ID,
+              })
+            : undefined;
         if (
           shouldSkipDispatchForMentionPolicy({
             accountId,
             event,
             currentBotOpenId: botOpenId,
+            groupIntentOverride: groupIntent,
           })
         ) {
           log(
@@ -476,7 +503,10 @@ function registerEventHandlers(
           );
           return;
         }
-        await inboundDebouncer.enqueue(event);
+        await inboundDebouncer.enqueue({
+          ...event,
+          __groupIntent: groupIntent,
+        } as FeishuMessageEvent & { __groupIntent?: GroupCoAddressIntent });
       };
       if (fireAndForget) {
         void processMessage().catch((err) => {

@@ -250,6 +250,19 @@ describe("group collaboration matrix", () => {
     );
   });
 
+  it("10a. mixed one-line phrasing plus continuation still stays in peer_collab", () => {
+    const event = makeEvent({
+      text: "@Flink-SRE @Starrocks-SRE 你俩先各说一句，再继续讨论，最后形成一句话结论",
+      mentions: [
+        { openId: "ou_flink", name: "Flink-SRE", key: "@_user_1" },
+        { openId: "ou_sr", name: "Starrocks-SRE", key: "@_user_2" },
+      ],
+    });
+    expect(classifyGroupCoAddressMode({ event: event as any, mentionedBotCount: 2, mainMentioned: false })).toBe(
+      "peer_collab",
+    );
+  });
+
   it("10b. explicit #协作 overrides direct-reply phrasing", () => {
     const event = makeEvent({
       text: "@Flink-SRE @Starrocks-SRE #协作 你俩各说一句后继续往下讨论",

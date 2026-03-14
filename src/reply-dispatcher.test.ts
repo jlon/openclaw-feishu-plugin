@@ -570,6 +570,82 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
   });
 
+  it("prefers real handoff target over precomputed visible mention targets", async () => {
+    const state = ensureCollaborationState({
+      chatId: "oc_chat",
+      messageId: "msg_handoff_visible_override",
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre", "coder"],
+      maxHops: 3,
+    });
+    applyCollaborationActions([
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "flink-sre",
+        ownershipClaim: "owner_candidate",
+      },
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "starrocks-sre",
+        ownershipClaim: "supporting",
+      },
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "coder",
+        ownershipClaim: "supporting",
+      },
+    ]);
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "flink-sre",
+      runtime: {} as never,
+      chatId: "oc_chat",
+      collaborationAgentResolver: (agentId) =>
+        ({
+          "starrocks-sre": { openId: "ou_starrocks", name: "Starrocks-SRE", key: "@visible_starrocks-sre" },
+          coder: { openId: "ou_coder", name: "SoulCoder", key: "@visible_coder" },
+        })[agentId],
+      visibleMentionTargets: [{ openId: "ou_coder", name: "SoulCoder", key: "@visible_coder" }],
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls.at(-1)?.[0];
+    await options.deliver(
+      {
+        text:
+          "我先补一层计算侧判断。\n\n```openclaw-collab\n" +
+          JSON.stringify({
+            action: "agent_handoff",
+            taskId: state.taskId,
+            handoffId: "handoff_visible_override",
+            fromAgentId: "flink-sre",
+            targetAgentId: "starrocks-sre",
+            timeWindow: "18:20-18:35",
+            currentFinding: "sink 吞吐下降",
+            unresolvedQuestion: "查询层是否是独立源头",
+            evidencePaths: ["shared/tasks/task_x/evidence/02-compute.md"],
+          }) +
+          "\n```",
+      },
+      { kind: "final" },
+    );
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "我先补一层计算侧判断。",
+        mentions: [
+          expect.objectContaining({
+            openId: "ou_starrocks",
+            name: "Starrocks-SRE",
+          }),
+        ],
+      }),
+    );
+  });
+
   it("sets disableBlockStreaming in replyOptions to prevent silent reply drops", async () => {
     const result = createFeishuReplyDispatcher({
       cfg: {} as never,

@@ -234,7 +234,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   type StreamTextUpdateMode = "snapshot" | "delta";
 
   const resolveActionMentionTargets = (text: string, kind?: "final" | "block") => {
-    if (kind !== "final" || effectiveMentionTargets?.length) {
+    if (kind !== "final") {
       return [] as MentionTarget[];
     }
     const { actions } = parseCollaborationControlBlocks(text);
@@ -357,10 +357,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         const rawText = payload.text ?? "";
         const actionMentionTargets = resolveActionMentionTargets(rawText, info?.kind);
         const renderMentionTargets =
-          effectiveMentionTargets && effectiveMentionTargets.length > 0
-            ? effectiveMentionTargets
-            : actionMentionTargets.length > 0
-              ? actionMentionTargets
+          actionMentionTargets.length > 0
+            ? actionMentionTargets
+            : effectiveMentionTargets && effectiveMentionTargets.length > 0
+              ? effectiveMentionTargets
               : undefined;
         if (info?.kind === "final") {
           const { actions } = parseCollaborationControlBlocks(rawText);

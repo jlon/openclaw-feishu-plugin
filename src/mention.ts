@@ -61,6 +61,21 @@ const GROUP_DIRECT_REPLY_PATTERNS = [
   /一句话介绍/u,
 ];
 
+const GROUP_CONTINUATION_PATTERNS = [
+  /继续/u,
+  /再.+(讨论|往下|补充|聊|辩论)/u,
+  /互相补充/u,
+  /补充/u,
+  /讨论/u,
+  /辩论/u,
+  /赞同/u,
+  /反驳/u,
+  /多次发表意见/u,
+  /形成一句(话)?结论/u,
+  /最后形成/u,
+  /下钻/u,
+];
+
 function normalizeParticipants(values: readonly string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
@@ -180,6 +195,14 @@ export function isGroupDirectReplyRequest(event: FeishuMessageEvent): boolean {
   return GROUP_DIRECT_REPLY_PATTERNS.some((pattern) => pattern.test(text));
 }
 
+export function isGroupContinuationRequest(event: FeishuMessageEvent): boolean {
+  if (event.message.chat_type !== "group") {
+    return false;
+  }
+  const text = extractEventText(event);
+  return GROUP_CONTINUATION_PATTERNS.some((pattern) => pattern.test(text));
+}
+
 export function classifyGroupCoAddressMode(params: {
   event: FeishuMessageEvent;
   mentionedBotCount: number;
@@ -199,7 +222,7 @@ export function classifyGroupCoAddressMode(params: {
   if (mainMentioned && isGroupCoordinationRequest(event)) {
     return "coordinate";
   }
-  if (isGroupDirectReplyRequest(event)) {
+  if (isGroupDirectReplyRequest(event) && !isGroupContinuationRequest(event)) {
     return "direct_reply";
   }
   return "peer_collab";

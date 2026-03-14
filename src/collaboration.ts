@@ -95,11 +95,10 @@ export type CollaborationState = {
   participants: string[];
   maxHops: number;
   handoffCount: number;
+  autoTurnCount: number;
   currentOwner?: string;
   speakerToken?: string;
-  scriptedTurnIndex?: number;
-  scriptedTotalTurns?: number;
-  scriptedDispatchedTurnKey?: string;
+  currentTurnDispatchKey?: string;
   lastSpeakerId?: string;
   peerAssessmentDispatchedAgents: string[];
   coordinateDispatchedAgents: string[];
@@ -123,11 +122,9 @@ export type CollaborationRuntimeContext = {
   participants: string[];
   maxHops: number;
   handoffCount: number;
+  autoTurnCount: number;
   currentOwner?: string;
   speakerToken?: string;
-  scriptedTurnIndex?: number;
-  scriptedTotalTurns?: number;
-  isFinalScriptedTurn?: boolean;
   isCurrentOwner: boolean;
   activeHandoff?: CollaborationActiveHandoffState;
   recentVisibleTurns: CollaborationVisibleTurn[];
@@ -192,9 +189,8 @@ function maybeAdvanceState(state: CollaborationState): CollaborationState {
     phase: "active_collab" as const,
     currentOwner: nextOwner,
     speakerToken: nextOwner,
-    scriptedTurnIndex: 0,
-    scriptedTotalTurns: undefined,
-    scriptedDispatchedTurnKey: undefined,
+    autoTurnCount: 0,
+    currentTurnDispatchKey: undefined,
     updatedAtMs: Date.now(),
   };
   collaborationStateByKey.set(state.stateKey, nextState);
@@ -255,6 +251,7 @@ export function ensureCollaborationState(params: {
     participants: normalizedParticipants,
     maxHops: params.maxHops,
     handoffCount: 0,
+    autoTurnCount: 0,
     currentOwner: params.mode === "coordinate" ? "main" : undefined,
     speakerToken: params.mode === "coordinate" ? "main" : undefined,
     peerAssessmentDispatchedAgents: [],
@@ -267,32 +264,6 @@ export function ensureCollaborationState(params: {
   collaborationStateByTaskId.set(taskId, nextState);
   return nextState;
 }
-
-export function markScriptedPeerAssessmentComplete(
-  taskId: string,
-  agentId: string,
-): CollaborationState | undefined {
-  const state = collaborationStateByTaskId.get(taskId);
-  if (
-    !state ||
-    state.phase !== "initial_assessment" ||
-    !state.participants.includes(agentId)
-  ) {
-    return state;
-  }
-  const nextState = replaceState({
-    ...state,
-    assessments: {
-      ...state.assessments,
-      [agentId]: {
-        agentId,
-        ownershipClaim: agentId === state.participants[0] ? "owner_candidate" : "supporting",
-      },
-    },
-  });
-  return maybeAdvanceState(nextState);
-}
-
 
 export function recordCollaborationVisibleTurn(params: {
   taskId: string;
@@ -323,7 +294,25 @@ export function recordCollaborationVisibleTurn(params: {
   });
 }
 
-export function advanceScriptedPeerTurn(
+function computePeerAutoTurnLimit(state: CollaborationState): number {
+  return Math.max(1, state.participants.length * Math.max(1, state.maxHops + 1) - 1);
+}
+
+export function resolveNextPeerAutoSpeaker(
+  state: CollaborationState,
+  speakerAgentId: string,
+): string | undefined {
+  if (state.mode !== "peer_collab" || state.participants.length <= 1) {
+    return undefined;
+  }
+  const currentOwnerIndex = state.participants.indexOf(speakerAgentId);
+  if (currentOwnerIndex < 0) {
+    return undefined;
+  }
+  return state.participants[(currentOwnerIndex + 1 + state.participants.length) % state.participants.length];
+}
+
+export function advancePeerAutoTurn(
   taskId: string,
   agentId: string,
 ): CollaborationState | undefined {
@@ -336,56 +325,64 @@ export function advanceScriptedPeerTurn(
   ) {
     return state;
   }
-  const nextTurnIndex = (state.scriptedTurnIndex ?? 0) + 1;
-  if (state.handoffCount >= state.maxHops || state.participants.length <= 1) {
+  const nextAutoTurnCount = state.autoTurnCount + 1;
+  if (
+    nextAutoTurnCount >= computePeerAutoTurnLimit(state) ||
+    state.participants.length <= 1
+  ) {
     return replaceState({
       ...state,
       phase: "completed",
       speakerToken: undefined,
       lastSpeakerId: agentId,
-      scriptedTurnIndex: nextTurnIndex,
-      scriptedTotalTurns: undefined,
-      scriptedDispatchedTurnKey: undefined,
+      autoTurnCount: nextAutoTurnCount,
+      currentTurnDispatchKey: undefined,
     });
   }
-  const currentOwnerIndex = state.participants.indexOf(agentId);
-  const nextOwner =
-    state.participants[(currentOwnerIndex + 1 + state.participants.length) % state.participants.length];
+  const nextOwner = resolveNextPeerAutoSpeaker(state, agentId);
+  if (!nextOwner) {
+    return replaceState({
+      ...state,
+      phase: "completed",
+      speakerToken: undefined,
+      lastSpeakerId: agentId,
+      autoTurnCount: nextAutoTurnCount,
+      currentTurnDispatchKey: undefined,
+    });
+  }
   return replaceState({
     ...state,
     currentOwner: nextOwner,
     speakerToken: nextOwner,
-    handoffCount: state.handoffCount + 1,
     lastSpeakerId: agentId,
-    scriptedTurnIndex: nextTurnIndex,
-    scriptedTotalTurns: undefined,
-    scriptedDispatchedTurnKey: undefined,
+    autoTurnCount: nextAutoTurnCount,
+    currentTurnDispatchKey: undefined,
   });
 }
 
-function buildScriptedTurnDispatchKey(state: CollaborationState): string | undefined {
+function buildCurrentTurnDispatchKey(state: CollaborationState): string | undefined {
   if (
     state.phase !== "active_collab" ||
     !state.currentOwner ||
-    typeof state.scriptedTurnIndex !== "number"
+    !state.speakerToken
   ) {
     return undefined;
   }
-  return `${state.phase}:${state.currentOwner}:${state.scriptedTurnIndex}`;
+  return `${state.phase}:${state.currentOwner}:${state.speakerToken}:${state.handoffCount}:${state.autoTurnCount}:${state.activeHandoffState?.handoffId ?? ""}`;
 }
 
-export function claimScriptedPeerTurnDispatch(taskId: string): CollaborationState | undefined {
+export function claimCurrentOwnerDispatch(taskId: string): CollaborationState | undefined {
   const state = collaborationStateByTaskId.get(taskId);
   if (!state) {
     return state;
   }
-  const dispatchKey = buildScriptedTurnDispatchKey(state);
-  if (!dispatchKey || state.scriptedDispatchedTurnKey === dispatchKey) {
+  const dispatchKey = buildCurrentTurnDispatchKey(state);
+  if (!dispatchKey || state.currentTurnDispatchKey === dispatchKey) {
     return undefined;
   }
   return replaceState({
     ...state,
-    scriptedDispatchedTurnKey: dispatchKey,
+    currentTurnDispatchKey: dispatchKey,
   });
 }
 
@@ -689,6 +686,7 @@ export function applyCollaborationActions(actions: CollaborationControlAction[])
           ...state,
           phase: "awaiting_accept",
           speakerToken: action.targetAgentId,
+          currentTurnDispatchKey: undefined,
           activeHandoffState: {
             handoffId: action.handoffId,
             fromAgentId: action.fromAgentId,
@@ -721,6 +719,7 @@ export function applyCollaborationActions(actions: CollaborationControlAction[])
           ...state,
           phase: "active_collab",
           speakerToken: state.currentOwner,
+          currentTurnDispatchKey: undefined,
           activeHandoffState: undefined,
         }),
       );
@@ -741,6 +740,7 @@ export function applyCollaborationActions(actions: CollaborationControlAction[])
           handoffCount: state.handoffCount + 1,
           currentOwner: action.agentId,
           speakerToken: action.completionStatus === "complete" ? undefined : action.agentId,
+          currentTurnDispatchKey: undefined,
           activeHandoffState: undefined,
         }),
       );
@@ -760,6 +760,7 @@ export function applyCollaborationActions(actions: CollaborationControlAction[])
           phase: "active_collab",
           currentOwner: state.activeHandoffState.fromAgentId,
           speakerToken: state.activeHandoffState.fromAgentId,
+          currentTurnDispatchKey: undefined,
           activeHandoffState: undefined,
         }),
       );
@@ -779,6 +780,7 @@ export function applyCollaborationActions(actions: CollaborationControlAction[])
           phase: "blocked_need_info",
           currentOwner: state.activeHandoffState.fromAgentId,
           speakerToken: state.activeHandoffState.fromAgentId,
+          currentTurnDispatchKey: undefined,
           activeHandoffState: {
             ...state.activeHandoffState,
             status: "blocked_need_info",
@@ -796,6 +798,7 @@ export function applyCollaborationActions(actions: CollaborationControlAction[])
           ...state,
           phase: "completed",
           speakerToken: undefined,
+          currentTurnDispatchKey: undefined,
           activeHandoffState: undefined,
         }),
       );
@@ -840,14 +843,9 @@ export function buildCollaborationRuntimeContext(params: {
     participants: params.state.participants,
     maxHops: params.state.maxHops,
     handoffCount: params.state.handoffCount,
+    autoTurnCount: params.state.autoTurnCount,
     currentOwner: params.state.currentOwner,
     speakerToken: params.state.speakerToken,
-    scriptedTurnIndex: params.state.scriptedTurnIndex,
-    scriptedTotalTurns: params.state.scriptedTotalTurns,
-    isFinalScriptedTurn:
-      params.state.mode === "peer_collab" && params.state.phase === "active_collab"
-        ? params.state.handoffCount >= params.state.maxHops
-        : undefined,
     isCurrentOwner,
     activeHandoff,
     recentVisibleTurns: params.state.recentVisibleTurns,
