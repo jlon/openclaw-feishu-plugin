@@ -466,7 +466,6 @@ export function resolveGroupCoAddressIntent(params: {
     rawParticipants[0] === mainAccountId &&
     mainExplicitlyMentioned &&
     knownAccountIds.length > 1 &&
-    isGroupDirectReplyRequest(event) &&
     isGroupCollectiveScopeRequest(event)
   ) {
     rawParticipants = normalizeParticipants(knownAccountIds);

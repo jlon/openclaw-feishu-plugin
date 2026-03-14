@@ -295,6 +295,99 @@ describe("group collaboration matrix", () => {
     );
   });
 
+  it("8d. coordinator-only collective discussion expands to all internal participants as peer_collab", () => {
+    const event = makeEvent({
+      text: "@首席大管家 让大家讨论下什么是灵魂",
+      mentions: [{ openId: "ou_main", name: "首席大管家", key: "@_user_1" }],
+    });
+    const intent = resolveGroupIntentForEventWithActiveThread({
+      event: event as any,
+      botOpenIdMap: new Map([
+        ["main", "ou_main"],
+        ["coder", "ou_coder"],
+        ["flink-sre", "ou_flink"],
+      ]),
+      botNameMap: new Map([
+        ["main", "首席大管家"],
+        ["coder", "SoulCoder"],
+        ["flink-sre", "Flink-SRE"],
+      ]),
+      mainAccountId: "main",
+    });
+    expect(intent).toEqual(
+      expect.objectContaining({
+        mode: "peer_collab",
+        scope: "all_internal",
+        mainMentioned: true,
+        mainExplicitlyMentioned: true,
+        rawParticipants: ["main", "coder", "flink-sre"],
+        participants: ["main", "coder", "flink-sre"],
+      }),
+    );
+  });
+
+  it("8e. coordinator-only collective summary expands to all internal participants as coordinate", () => {
+    const event = makeEvent({
+      text: "@首席大管家 让大家先看，最后给我一个结论",
+      mentions: [{ openId: "ou_main", name: "首席大管家", key: "@_user_1" }],
+    });
+    const intent = resolveGroupIntentForEventWithActiveThread({
+      event: event as any,
+      botOpenIdMap: new Map([
+        ["main", "ou_main"],
+        ["coder", "ou_coder"],
+        ["flink-sre", "ou_flink"],
+      ]),
+      botNameMap: new Map([
+        ["main", "首席大管家"],
+        ["coder", "SoulCoder"],
+        ["flink-sre", "Flink-SRE"],
+      ]),
+      mainAccountId: "main",
+    });
+    expect(intent).toEqual(
+      expect.objectContaining({
+        mode: "coordinate",
+        scope: "all_internal",
+        mainMentioned: true,
+        mainExplicitlyMentioned: true,
+        rawParticipants: ["main", "coder", "flink-sre"],
+        participants: ["main", "coder", "flink-sre"],
+      }),
+    );
+  });
+
+  it("8f. coordinator-only self request stays mentioned_only", () => {
+    const event = makeEvent({
+      text: "@首席大管家 你介绍下自己",
+      mentions: [{ openId: "ou_main", name: "首席大管家", key: "@_user_1" }],
+    });
+    const intent = resolveGroupIntentForEventWithActiveThread({
+      event: event as any,
+      botOpenIdMap: new Map([
+        ["main", "ou_main"],
+        ["coder", "ou_coder"],
+        ["flink-sre", "ou_flink"],
+      ]),
+      botNameMap: new Map([
+        ["main", "首席大管家"],
+        ["coder", "SoulCoder"],
+        ["flink-sre", "Flink-SRE"],
+      ]),
+      mainAccountId: "main",
+    });
+    expect(intent).toEqual(
+      expect.objectContaining({
+        mode: "none",
+        scope: "mentioned_only",
+        mainMentioned: true,
+        mainExplicitlyMentioned: true,
+        rawParticipants: ["main"],
+        participants: ["main"],
+      }),
+    );
+  });
+
   it("8c. a non-main default account acts as the coordinator raw entry", () => {
     setFeishuBotOpenIdForTesting("dispatcher", "ou_dispatcher");
     setFeishuBotOpenIdForTesting("coder", "ou_coder");

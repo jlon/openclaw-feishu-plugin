@@ -2595,6 +2595,312 @@ describe("handleFeishuMessage command authorization", () => {
     ]);
   });
 
+  it("fans out coordinator-only collective discussion requests into peer collaboration", async () => {
+    botOpenIds.set("main", "ou_main");
+    botOpenIds.set("coder", "ou_coder");
+    botOpenIds.set("starrocks-sre", "ou_starrocks");
+    botNames.set("main", "首席大管家");
+    botNames.set("coder", "SoulCoder");
+    botNames.set("starrocks-sre", "Starrocks-SRE");
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "main",
+      channel: "feishu",
+      accountId: "main",
+      sessionKey: "agent:main:feishu:group:oc-group",
+      mainSessionKey: "agent:main:main",
+      matchedBy: "explicit",
+    });
+    mockCreateFeishuReplyDispatcher.mockImplementation((params) => ({
+      dispatcher: {
+        markComplete: vi.fn(),
+        waitForIdle: vi.fn(async () => {}),
+      },
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      _params: params,
+    }));
+
+    let dispatchCount = 0;
+    mockDispatchReplyFromConfig.mockImplementation(async ({ ctx }: { ctx: Record<string, string> }) => {
+      dispatchCount += 1;
+      if (dispatchCount === 1) {
+        applyCollaborationActions([
+          {
+            action: "collab_assess",
+            taskId: ctx.CollaborationTaskId,
+            agentId: "main",
+            ownershipClaim: "supporting",
+            currentFinding: "先给一个协调视角判断",
+            nextCheck: "等待其他参与者补充",
+            needsWorker: false,
+          },
+        ]);
+      } else if (dispatchCount === 2) {
+        applyCollaborationActions([
+          {
+            action: "collab_assess",
+            taskId: ctx.CollaborationTaskId,
+            agentId: "coder",
+            ownershipClaim: "owner_candidate",
+            currentFinding: "从 SoulCoder 角度先补一层判断",
+            nextCheck: "继续补充灵魂的工程含义",
+            needsWorker: false,
+          },
+        ]);
+      } else if (dispatchCount === 3) {
+        applyCollaborationActions([
+          {
+            action: "collab_assess",
+            taskId: ctx.CollaborationTaskId,
+            agentId: "starrocks-sre",
+            ownershipClaim: "supporting",
+            currentFinding: "从存储和持久化角度补一层",
+            nextCheck: "等待 owner 继续",
+            needsWorker: false,
+          },
+        ]);
+      }
+      return { queuedFinal: false, counts: { final: 1 } };
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          defaultAccount: "main",
+          accounts: {
+            main: {
+              enabled: true,
+              appId: "app_main",
+              appSecret: "secret_main",
+              requireMention: false,
+              groupPolicy: "open",
+              renderMode: "raw",
+              streaming: false,
+            },
+            coder: {
+              enabled: true,
+              appId: "app_coder",
+              appSecret: "secret_coder",
+              requireMention: true,
+              groupPolicy: "open",
+              renderMode: "raw",
+              streaming: false,
+              name: "SoulCoder",
+            },
+            "starrocks-sre": {
+              enabled: true,
+              appId: "app_starrocks",
+              appSecret: "secret_starrocks",
+              requireMention: true,
+              groupPolicy: "open",
+              renderMode: "raw",
+              streaming: false,
+              name: "Starrocks-SRE",
+            },
+          },
+        },
+      },
+      agents: {
+        list: [{ id: "main", name: "首席大管家" }, { id: "coder", name: "SoulCoder" }, { id: "starrocks-sre", name: "Starrocks-SRE" }],
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-user",
+        },
+      },
+      message: {
+        message_id: "msg-coordinator-collective-discussion",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({
+          text: '<at user_id="ou_main">首席大管家</at> 让大家讨论下什么是灵魂',
+        }),
+        mentions: [{ key: "@_user_1", id: { open_id: "ou_main" }, name: "首席大管家", tenant_key: "" }],
+      },
+    };
+
+    await handleFeishuMessage({
+      cfg,
+      event,
+      accountId: "main",
+      botOpenId: "ou_main",
+      botName: "首席大管家",
+      runtime: createRuntimeEnv(),
+    });
+
+    const collaborationCalls = mockDispatchReplyFromConfig.mock.calls.map(
+      (call) => call[0] as { ctx: Record<string, string> },
+    );
+    expect(collaborationCalls[0]?.ctx).toEqual(
+      expect.objectContaining({
+        AccountId: "main",
+        MessageSid: "msg-coordinator-collective-discussion",
+        CollaborationMode: "peer_collab",
+        GroupCoAddressScope: "all_internal",
+      }),
+    );
+    const peerInitCalls = collaborationCalls.filter((call) =>
+      call.ctx.MessageSid?.includes("::peer-init::"),
+    );
+    expect(peerInitCalls.map((call) => call.ctx.AccountId).sort()).toEqual([
+      "coder",
+      "starrocks-sre",
+    ]);
+    expect(peerInitCalls.map((call) => call.ctx.GroupCoAddressScope)).toEqual([
+      "all_internal",
+      "all_internal",
+    ]);
+    const ownerCalls = collaborationCalls.filter((call) => call.ctx.MessageSid?.includes("::owner::"));
+    expect(ownerCalls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("fans out coordinator-only collective summary requests into coordinate", async () => {
+    botOpenIds.set("main", "ou_main");
+    botOpenIds.set("coder", "ou_coder");
+    botOpenIds.set("starrocks-sre", "ou_starrocks");
+    botNames.set("main", "首席大管家");
+    botNames.set("coder", "SoulCoder");
+    botNames.set("starrocks-sre", "Starrocks-SRE");
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "main",
+      channel: "feishu",
+      accountId: "main",
+      sessionKey: "agent:main:feishu:group:oc-group",
+      mainSessionKey: "agent:main:main",
+      matchedBy: "explicit",
+    });
+    mockCreateFeishuReplyDispatcher.mockImplementation((params) => ({
+      dispatcher: {
+        markComplete: vi.fn(),
+        waitForIdle: vi.fn(async () => {}),
+      },
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      _params: params,
+    }));
+    mockDispatchReplyFromConfig.mockImplementation(async ({ ctx }: { ctx: Record<string, string> }) => {
+      if (ctx.AccountId === "coder" || ctx.AccountId === "starrocks-sre") {
+        applyCollaborationActions([
+          {
+            action: "collab_report_complete",
+            taskId: ctx.CollaborationTaskId,
+            agentId: ctx.AccountId,
+          },
+        ]);
+      }
+      return { queuedFinal: false, counts: { final: 1 } };
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          defaultAccount: "main",
+          accounts: {
+            main: {
+              enabled: true,
+              appId: "app_main",
+              appSecret: "secret_main",
+              requireMention: false,
+              groupPolicy: "open",
+              renderMode: "raw",
+              streaming: false,
+            },
+            coder: {
+              enabled: true,
+              appId: "app_coder",
+              appSecret: "secret_coder",
+              requireMention: true,
+              groupPolicy: "open",
+              renderMode: "raw",
+              streaming: false,
+              name: "SoulCoder",
+            },
+            "starrocks-sre": {
+              enabled: true,
+              appId: "app_starrocks",
+              appSecret: "secret_starrocks",
+              requireMention: true,
+              groupPolicy: "open",
+              renderMode: "raw",
+              streaming: false,
+              name: "Starrocks-SRE",
+            },
+          },
+        },
+      },
+      agents: {
+        list: [{ id: "main", name: "首席大管家" }, { id: "coder", name: "SoulCoder" }, { id: "starrocks-sre", name: "Starrocks-SRE" }],
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-user",
+        },
+      },
+      message: {
+        message_id: "msg-coordinator-collective-summary",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({
+          text: '<at user_id="ou_main">首席大管家</at> 让大家先看，最后给我一个结论',
+        }),
+        mentions: [{ key: "@_user_1", id: { open_id: "ou_main" }, name: "首席大管家", tenant_key: "" }],
+      },
+    };
+
+    await handleFeishuMessage({
+      cfg,
+      event,
+      accountId: "main",
+      botOpenId: "ou_main",
+      botName: "首席大管家",
+      runtime: createRuntimeEnv(),
+    });
+
+    const coordinateCalls = mockDispatchReplyFromConfig.mock.calls.map(
+      (call) => call[0] as { ctx: Record<string, string> },
+    );
+    expect(coordinateCalls[0]?.ctx).toEqual(
+      expect.objectContaining({
+        AccountId: "main",
+        MessageSid: "msg-coordinator-collective-summary",
+        CollaborationMode: "coordinate",
+        GroupCoAddressScope: "all_internal",
+      }),
+    );
+    const specialistCalls = coordinateCalls
+      .filter((call) => call.ctx.MessageSid?.includes("::coordinate::"))
+      .map((call) => call.ctx)
+      .sort((a, b) => String(a.AccountId).localeCompare(String(b.AccountId)));
+    expect(specialistCalls).toEqual([
+      expect.objectContaining({
+        AccountId: "coder",
+        CollaborationMode: "coordinate",
+        GroupCoAddressScope: "all_internal",
+      }),
+      expect.objectContaining({
+        AccountId: "starrocks-sre",
+        CollaborationMode: "coordinate",
+        GroupCoAddressScope: "all_internal",
+      }),
+    ]);
+    expect(coordinateCalls.at(-1)?.ctx).toEqual(
+      expect.objectContaining({
+        AccountId: "main",
+        MessageSid: expect.stringContaining("::coordinate-summary::"),
+        CollaborationMode: "coordinate",
+        GroupCoAddressScope: "all_internal",
+      }),
+    );
+  });
+
   it("preserves display-only visible mentions for single-agent group replies with other mentioned entities", async () => {
     botOpenIds.set("starrocks-sre", "ou_starrocks_self");
     mockResolveAgentRoute.mockReturnValue({
