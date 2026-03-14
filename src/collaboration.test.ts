@@ -121,34 +121,15 @@ describe("collaboration state", () => {
     expect(parsed.actions).toEqual([]);
   });
 
-  it("elects owner after all peer_collab assessments arrive", () => {
+  it("elects owner after all scripted peer assessments arrive", () => {
     const state = ensureCollaborationState({
       chatId: "oc_group_1",
       messageId: "msg_3",
       mode: "peer_collab",
       participants: ["flink-sre", "starrocks-sre"],
     });
-    applyCollaborationActions([
-      {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "flink-sre",
-        ownershipClaim: "owner_candidate",
-        currentFinding: "Flink checkpoint正常",
-        nextCheck: "看sink",
-      },
-    ]);
-    expect(getCollaborationStateForTesting(state.taskId)?.phase).toBe("initial_assessment");
-    applyCollaborationActions([
-      {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "starrocks-sre",
-        ownershipClaim: "supporting",
-        currentFinding: "查询层像下游表现",
-        nextCheck: "看慢查询",
-      },
-    ]);
+    expect(markScriptedPeerAssessmentComplete(state.taskId, "flink-sre")?.phase).toBe("initial_assessment");
+    markScriptedPeerAssessmentComplete(state.taskId, "starrocks-sre");
     const finalState = getCollaborationStateForTesting(state.taskId);
     expect(finalState?.phase).toBe("active_collab");
     expect(finalState?.currentOwner).toBe("flink-sre");
@@ -229,6 +210,40 @@ describe("collaboration state", () => {
         lastSpeakerId: "starrocks-sre",
       }),
     );
+  });
+
+  it("ignores handoff control actions for scripted peer collaboration", () => {
+    const state = ensureCollaborationState({
+      chatId: "oc_group_scripted_ignore_handoff",
+      messageId: "msg_scripted_ignore_handoff",
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre"],
+      maxHops: 2,
+      explicitMode: "peer_collab",
+    });
+    markScriptedPeerAssessmentComplete(state.taskId, "flink-sre");
+    markScriptedPeerAssessmentComplete(state.taskId, "starrocks-sre");
+    const before = getCollaborationStateForTesting(state.taskId);
+
+    applyCollaborationActions([
+      {
+        action: "agent_handoff",
+        taskId: state.taskId,
+        handoffId: "handoff_should_be_ignored",
+        fromAgentId: "flink-sre",
+        targetAgentId: "starrocks-sre",
+        timeWindow: "18:20-18:35",
+        currentFinding: "sink 吞吐下降",
+        unresolvedQuestion: "查询层是否是独立源头",
+        evidencePaths: ["shared/tasks/task_x/evidence/02-compute.md"],
+      },
+    ]);
+
+    const after = getCollaborationStateForTesting(state.taskId);
+    expect(after).toEqual(before);
+    expect(after?.activeHandoffState).toBeUndefined();
+    expect(after?.phase).toBe("active_collab");
+    expect(after?.currentOwner).toBe("flink-sre");
   });
 
   it("claims each scripted peer turn only once", () => {
@@ -346,28 +361,16 @@ describe("collaboration state", () => {
     const state = ensureCollaborationState({
       chatId: "oc_group_1",
       messageId: "msg_handoff_count",
-      mode: "peer_collab",
-      participants: ["flink-sre", "starrocks-sre"],
+      mode: "coordinate",
+      participants: ["main", "starrocks-sre"],
       maxHops: 3,
     });
     applyCollaborationActions([
       {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "flink-sre",
-        ownershipClaim: "owner_candidate",
-      },
-      {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "starrocks-sre",
-        ownershipClaim: "supporting",
-      },
-      {
         action: "agent_handoff",
         taskId: state.taskId,
         handoffId: "handoff_count_1",
-        fromAgentId: "flink-sre",
+        fromAgentId: "main",
         targetAgentId: "starrocks-sre",
         timeWindow: "18:20-18:35",
         currentFinding: "sink 吞吐下降",
@@ -390,34 +393,16 @@ describe("collaboration state", () => {
     const state = ensureCollaborationState({
       chatId: "oc_group_1",
       messageId: "msg_max_hops",
-      mode: "peer_collab",
-      participants: ["flink-sre", "starrocks-sre", "coder"],
+      mode: "coordinate",
+      participants: ["main", "starrocks-sre", "coder"],
       maxHops: 1,
     });
     applyCollaborationActions([
       {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "flink-sre",
-        ownershipClaim: "owner_candidate",
-      },
-      {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "starrocks-sre",
-        ownershipClaim: "supporting",
-      },
-      {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "coder",
-        ownershipClaim: "observer",
-      },
-      {
         action: "agent_handoff",
         taskId: state.taskId,
         handoffId: "handoff_max_1",
-        fromAgentId: "flink-sre",
+        fromAgentId: "main",
         targetAgentId: "starrocks-sre",
         timeWindow: "18:20-18:35",
         currentFinding: "sink 吞吐下降",
@@ -462,29 +447,15 @@ describe("collaboration state", () => {
     const state = ensureCollaborationState({
       chatId: "oc_group_1",
       messageId: "msg_5",
-      mode: "peer_collab",
-      participants: ["flink-sre", "starrocks-sre"],
+      mode: "coordinate",
+      participants: ["main", "starrocks-sre"],
     });
-    applyCollaborationActions([
-      {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "flink-sre",
-        ownershipClaim: "owner_candidate",
-      },
-      {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "starrocks-sre",
-        ownershipClaim: "supporting",
-      },
-    ]);
     applyCollaborationActions([
       {
         action: "agent_handoff",
         taskId: state.taskId,
         handoffId: "handoff_1",
-        fromAgentId: "flink-sre",
+        fromAgentId: "main",
         targetAgentId: "starrocks-sre",
         timeWindow: "18:20-18:35",
         currentFinding: "sink 吞吐下降",
@@ -494,10 +465,10 @@ describe("collaboration state", () => {
     ]);
     const finalState = getCollaborationStateForTesting(state.taskId);
     expect(finalState?.phase).toBe("awaiting_accept");
-    expect(finalState?.currentOwner).toBe("flink-sre");
+    expect(finalState?.currentOwner).toBe("main");
     expect(finalState?.activeHandoffState).toMatchObject({
       handoffId: "handoff_1",
-      fromAgentId: "flink-sre",
+      fromAgentId: "main",
       targetAgentId: "starrocks-sre",
       status: "awaiting_accept",
     });
@@ -507,27 +478,15 @@ describe("collaboration state", () => {
     const state = ensureCollaborationState({
       chatId: "oc_group_1",
       messageId: "msg_6",
-      mode: "peer_collab",
-      participants: ["flink-sre", "starrocks-sre"],
+      mode: "coordinate",
+      participants: ["main", "starrocks-sre"],
     });
     applyCollaborationActions([
-      {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "flink-sre",
-        ownershipClaim: "owner_candidate",
-      },
-      {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "starrocks-sre",
-        ownershipClaim: "supporting",
-      },
       {
         action: "agent_handoff",
         taskId: state.taskId,
         handoffId: "handoff_2",
-        fromAgentId: "flink-sre",
+        fromAgentId: "main",
         targetAgentId: "starrocks-sre",
         timeWindow: "18:20-18:35",
         currentFinding: "sink 吞吐下降",
@@ -552,27 +511,15 @@ describe("collaboration state", () => {
     const state = ensureCollaborationState({
       chatId: "oc_group_1",
       messageId: "msg_7",
-      mode: "peer_collab",
-      participants: ["flink-sre", "starrocks-sre"],
+      mode: "coordinate",
+      participants: ["main", "starrocks-sre"],
     });
     applyCollaborationActions([
-      {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "flink-sre",
-        ownershipClaim: "owner_candidate",
-      },
-      {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "starrocks-sre",
-        ownershipClaim: "supporting",
-      },
       {
         action: "agent_handoff",
         taskId: state.taskId,
         handoffId: "handoff_3",
-        fromAgentId: "flink-sre",
+        fromAgentId: "main",
         targetAgentId: "starrocks-sre",
         timeWindow: "18:20-18:35",
         currentFinding: "sink 吞吐下降",
@@ -588,8 +535,8 @@ describe("collaboration state", () => {
     ]);
     const finalState = getCollaborationStateForTesting(state.taskId);
     expect(finalState?.phase).toBe("active_collab");
-    expect(finalState?.currentOwner).toBe("flink-sre");
-    expect(finalState?.speakerToken).toBe("flink-sre");
+    expect(finalState?.currentOwner).toBe("main");
+    expect(finalState?.speakerToken).toBe("main");
     expect(finalState?.activeHandoffState).toBeUndefined();
   });
 
@@ -597,27 +544,15 @@ describe("collaboration state", () => {
     const state = ensureCollaborationState({
       chatId: "oc_group_1",
       messageId: "msg_8",
-      mode: "peer_collab",
-      participants: ["flink-sre", "starrocks-sre"],
+      mode: "coordinate",
+      participants: ["main", "starrocks-sre"],
     });
     applyCollaborationActions([
-      {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "flink-sre",
-        ownershipClaim: "owner_candidate",
-      },
-      {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "starrocks-sre",
-        ownershipClaim: "supporting",
-      },
       {
         action: "agent_handoff",
         taskId: state.taskId,
         handoffId: "handoff_4",
-        fromAgentId: "flink-sre",
+        fromAgentId: "main",
         targetAgentId: "starrocks-sre",
         timeWindow: "18:20-18:35",
         currentFinding: "sink 吞吐下降",
@@ -633,8 +568,8 @@ describe("collaboration state", () => {
     ]);
     const finalState = getCollaborationStateForTesting(state.taskId);
     expect(finalState?.phase).toBe("blocked_need_info");
-    expect(finalState?.currentOwner).toBe("flink-sre");
-    expect(finalState?.speakerToken).toBe("flink-sre");
+    expect(finalState?.currentOwner).toBe("main");
+    expect(finalState?.speakerToken).toBe("main");
     expect(finalState?.activeHandoffState).toMatchObject({
       handoffId: "handoff_4",
       status: "blocked_need_info",
@@ -665,33 +600,15 @@ describe("collaboration state", () => {
     const state = ensureCollaborationState({
       chatId: "oc_group_1",
       messageId: "msg_10",
-      mode: "peer_collab",
-      participants: ["flink-sre", "starrocks-sre", "coder"],
+      mode: "coordinate",
+      participants: ["main", "starrocks-sre", "coder"],
     });
     applyCollaborationActions([
-      {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "flink-sre",
-        ownershipClaim: "owner_candidate",
-      },
-      {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "starrocks-sre",
-        ownershipClaim: "supporting",
-      },
-      {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "coder",
-        ownershipClaim: "observer",
-      },
       {
         action: "agent_handoff",
         taskId: state.taskId,
         handoffId: "handoff_blocked_1",
-        fromAgentId: "flink-sre",
+        fromAgentId: "main",
         targetAgentId: "starrocks-sre",
         timeWindow: "18:20-18:35",
         currentFinding: "sink 吞吐下降",
@@ -708,7 +625,7 @@ describe("collaboration state", () => {
         action: "agent_handoff",
         taskId: state.taskId,
         handoffId: "handoff_blocked_2",
-        fromAgentId: "flink-sre",
+        fromAgentId: "main",
         targetAgentId: "coder",
         timeWindow: "18:20-18:35",
         currentFinding: "需要补充日志和截图",
@@ -718,11 +635,11 @@ describe("collaboration state", () => {
     ]);
     const finalState = getCollaborationStateForTesting(state.taskId);
     expect(finalState?.phase).toBe("awaiting_accept");
-    expect(finalState?.currentOwner).toBe("flink-sre");
+    expect(finalState?.currentOwner).toBe("main");
     expect(finalState?.speakerToken).toBe("coder");
     expect(finalState?.activeHandoffState).toMatchObject({
       handoffId: "handoff_blocked_2",
-      fromAgentId: "flink-sre",
+      fromAgentId: "main",
       targetAgentId: "coder",
       status: "awaiting_accept",
     });
@@ -732,28 +649,16 @@ describe("collaboration state", () => {
     const state = ensureCollaborationState({
       chatId: "oc_group_missing_taskid",
       messageId: "msg_missing_taskid",
-      mode: "peer_collab",
-      participants: ["flink-sre", "starrocks-sre"],
+      mode: "coordinate",
+      participants: ["main", "starrocks-sre"],
       maxHops: 3,
     });
     applyCollaborationActions([
       {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "flink-sre",
-        ownershipClaim: "owner_candidate",
-      },
-      {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "starrocks-sre",
-        ownershipClaim: "supporting",
-      },
-      {
         action: "agent_handoff",
         taskId: state.taskId,
         handoffId: "handoff_missing_taskid",
-        fromAgentId: "flink-sre",
+        fromAgentId: "main",
         targetAgentId: "starrocks-sre",
         timeWindow: "",
         currentFinding: "请从存储/查询视角补一层",
@@ -777,28 +682,16 @@ describe("collaboration state", () => {
     const state = ensureCollaborationState({
       chatId: "oc_group_accept_complete",
       messageId: "msg_accept_complete",
-      mode: "peer_collab",
-      participants: ["flink-sre", "starrocks-sre"],
+      mode: "coordinate",
+      participants: ["main", "starrocks-sre"],
       maxHops: 3,
     });
     applyCollaborationActions([
       {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "flink-sre",
-        ownershipClaim: "owner_candidate",
-      },
-      {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "starrocks-sre",
-        ownershipClaim: "supporting",
-      },
-      {
         action: "agent_handoff",
         taskId: state.taskId,
         handoffId: "handoff_accept_complete",
-        fromAgentId: "flink-sre",
+        fromAgentId: "main",
         targetAgentId: "starrocks-sre",
         timeWindow: "",
         currentFinding: "请给最终结论",
@@ -825,27 +718,15 @@ describe("collaboration state", () => {
     const state = ensureCollaborationState({
       chatId: "oc_group_1",
       messageId: "msg_10a",
-      mode: "peer_collab",
-      participants: ["flink-sre", "starrocks-sre"],
+      mode: "coordinate",
+      participants: ["main", "starrocks-sre"],
     });
     applyCollaborationActions([
-      {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "flink-sre",
-        ownershipClaim: "owner_candidate",
-      },
-      {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "starrocks-sre",
-        ownershipClaim: "supporting",
-      },
       {
         action: "agent_handoff",
         taskId: state.taskId,
         handoffId: "handoff_waiting_1",
-        fromAgentId: "flink-sre",
+        fromAgentId: "main",
         targetAgentId: "starrocks-sre",
         timeWindow: "18:20-18:35",
         currentFinding: "sink 吞吐下降",
@@ -856,7 +737,7 @@ describe("collaboration state", () => {
     const waitingState = getCollaborationStateForTesting(state.taskId);
     const ctx = buildCollaborationRuntimeContext({
       state: waitingState!,
-      agentId: "flink-sre",
+      agentId: "main",
     });
     expect(ctx.allowedActions).toEqual(["agent_handoff", "agent_handoff_cancel"]);
   });
@@ -865,27 +746,15 @@ describe("collaboration state", () => {
     const state = ensureCollaborationState({
       chatId: "oc_group_1",
       messageId: "msg_11",
-      mode: "peer_collab",
-      participants: ["flink-sre", "starrocks-sre"],
+      mode: "coordinate",
+      participants: ["main", "starrocks-sre"],
     });
     applyCollaborationActions([
-      {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "flink-sre",
-        ownershipClaim: "owner_candidate",
-      },
-      {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "starrocks-sre",
-        ownershipClaim: "supporting",
-      },
       {
         action: "agent_handoff",
         taskId: state.taskId,
         handoffId: "handoff_expire_1",
-        fromAgentId: "flink-sre",
+        fromAgentId: "main",
         targetAgentId: "starrocks-sre",
         timeWindow: "18:20-18:35",
         currentFinding: "sink 吞吐下降",
@@ -896,13 +765,13 @@ describe("collaboration state", () => {
         action: "agent_handoff_expire",
         taskId: state.taskId,
         handoffId: "handoff_expire_1",
-        agentId: "flink-sre",
+        agentId: "main",
       } as never,
     ]);
     const finalState = getCollaborationStateForTesting(state.taskId);
     expect(finalState?.phase).toBe("active_collab");
-    expect(finalState?.currentOwner).toBe("flink-sre");
-    expect(finalState?.speakerToken).toBe("flink-sre");
+    expect(finalState?.currentOwner).toBe("main");
+    expect(finalState?.speakerToken).toBe("main");
     expect(finalState?.activeHandoffState).toBeUndefined();
   });
 
@@ -910,33 +779,15 @@ describe("collaboration state", () => {
     const state = ensureCollaborationState({
       chatId: "oc_group_1",
       messageId: "msg_12",
-      mode: "peer_collab",
-      participants: ["flink-sre", "starrocks-sre", "coder"],
+      mode: "coordinate",
+      participants: ["main", "starrocks-sre", "coder"],
     });
     applyCollaborationActions([
-      {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "flink-sre",
-        ownershipClaim: "owner_candidate",
-      },
-      {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "starrocks-sre",
-        ownershipClaim: "supporting",
-      },
-      {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "coder",
-        ownershipClaim: "observer",
-      },
       {
         action: "agent_handoff",
         taskId: state.taskId,
         handoffId: "handoff_old",
-        fromAgentId: "flink-sre",
+        fromAgentId: "main",
         targetAgentId: "starrocks-sre",
         timeWindow: "18:20-18:35",
         currentFinding: "先看查询层",
@@ -953,7 +804,7 @@ describe("collaboration state", () => {
         action: "agent_handoff",
         taskId: state.taskId,
         handoffId: "handoff_new",
-        fromAgentId: "flink-sre",
+        fromAgentId: "main",
         targetAgentId: "coder",
         timeWindow: "18:20-18:35",
         currentFinding: "先补日志和截图",
@@ -969,7 +820,7 @@ describe("collaboration state", () => {
     ]);
     const finalState = getCollaborationStateForTesting(state.taskId);
     expect(finalState?.phase).toBe("awaiting_accept");
-    expect(finalState?.currentOwner).toBe("flink-sre");
+    expect(finalState?.currentOwner).toBe("main");
     expect(finalState?.speakerToken).toBe("coder");
     expect(finalState?.activeHandoffState).toMatchObject({
       handoffId: "handoff_new",

@@ -19,6 +19,8 @@ export type MentionTarget = {
 export type GroupCoAddressMode = "none" | "direct_reply" | "peer_collab" | "coordinate";
 
 const EXPLICIT_GROUP_MODE_PATTERN = /(?:^|\s)#(直答|协作|编排)(?=\s|$)/u;
+const EXPLICIT_GROUP_MODE_WITH_PARTICIPANTS_PATTERN =
+  /(?:^|\s)#(直答|协作|编排)\s*[\(\[（【]([^)）\]】]+)[\)）\]】]/u;
 
 const GROUP_COORDINATION_PATTERNS = [
   /安排/u,
@@ -53,7 +55,14 @@ const GROUP_DIRECT_REPLY_PATTERNS = [
   /一句话介绍/u,
 ];
 
-function extractEventText(event: FeishuMessageEvent): string {
+function normalizeExplicitParticipantToken(value: string | undefined): string {
+  return (value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, "");
+}
+
+export function extractEventText(event: FeishuMessageEvent): string {
   const raw = event.message.content ?? "";
   try {
     const parsed = JSON.parse(raw) as { text?: unknown; body?: unknown };
@@ -72,7 +81,9 @@ function extractEventText(event: FeishuMessageEvent): string {
 export function extractExplicitGroupCoAddressMode(
   text: string,
 ): Exclude<GroupCoAddressMode, "none"> | undefined {
-  const match = text.match(EXPLICIT_GROUP_MODE_PATTERN);
+  const match =
+    text.match(EXPLICIT_GROUP_MODE_WITH_PARTICIPANTS_PATTERN) ??
+    text.match(EXPLICIT_GROUP_MODE_PATTERN);
   if (!match) {
     return undefined;
   }
@@ -88,6 +99,43 @@ export function extractExplicitGroupCoAddressMode(
   return undefined;
 }
 
+export function resolveExplicitGroupCoAddressParticipants(params: {
+  text: string;
+  knownAccountIds: readonly string[];
+  botNameMap?: ReadonlyMap<string, string>;
+}): string[] {
+  const { text, knownAccountIds, botNameMap } = params;
+  const match = text.match(EXPLICIT_GROUP_MODE_WITH_PARTICIPANTS_PATTERN);
+  if (!match?.[2]) {
+    return [];
+  }
+  const normalizedKnownAccounts = new Map(
+    knownAccountIds
+      .map((accountId) => [normalizeExplicitParticipantToken(accountId), accountId] as const)
+      .filter(([normalized]) => normalized.length > 0),
+  );
+  const normalizedKnownNames = new Map(
+    knownAccountIds
+      .map(
+        (accountId) =>
+          [normalizeExplicitParticipantToken(botNameMap?.get(accountId)), accountId] as const,
+      )
+      .filter(([normalized]) => normalized.length > 0),
+  );
+  return [
+    ...new Set(
+      match[2]
+        .split(/[，,、/|]/u)
+        .map((token) => normalizeExplicitParticipantToken(token))
+        .map(
+          (normalized) =>
+            normalizedKnownAccounts.get(normalized) ?? normalizedKnownNames.get(normalized),
+        )
+        .filter((accountId): accountId is string => Boolean(accountId)),
+    ),
+  ];
+}
+
 export function stripExplicitGroupCoAddressMode(text: string): {
   text: string;
   explicitMode?: Exclude<GroupCoAddressMode, "none">;
@@ -97,7 +145,11 @@ export function stripExplicitGroupCoAddressMode(text: string): {
     return { text };
   }
   return {
-    text: text.replace(EXPLICIT_GROUP_MODE_PATTERN, " ").replace(/\s+/gu, " ").trim(),
+    text: text
+      .replace(EXPLICIT_GROUP_MODE_WITH_PARTICIPANTS_PATTERN, " ")
+      .replace(EXPLICIT_GROUP_MODE_PATTERN, " ")
+      .replace(/\s+/gu, " ")
+      .trim(),
     explicitMode,
   };
 }
@@ -124,12 +176,15 @@ export function classifyGroupCoAddressMode(params: {
   mainMentioned: boolean;
 }): GroupCoAddressMode {
   const { event, mentionedBotCount, mainMentioned } = params;
-  if (event.message.chat_type !== "group" || mentionedBotCount < 2) {
+  if (event.message.chat_type !== "group") {
     return "none";
   }
   const explicitMode = extractExplicitGroupCoAddressMode(extractEventText(event));
   if (explicitMode) {
     return explicitMode;
+  }
+  if (mentionedBotCount < 2) {
+    return "none";
   }
   if (mainMentioned && isGroupCoordinationRequest(event)) {
     return "coordinate";
@@ -137,7 +192,7 @@ export function classifyGroupCoAddressMode(params: {
   if (isGroupDirectReplyRequest(event)) {
     return "direct_reply";
   }
-  return "peer_collab";
+  return "direct_reply";
 }
 
 function extractMentionTargetsFromContent(

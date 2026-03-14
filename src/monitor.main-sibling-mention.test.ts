@@ -77,7 +77,7 @@ describe("shouldSkipDispatchForMentionPolicy", () => {
     ).toBe(false);
   });
 
-  it("does not skip child dispatch when main and the child are co-mentioned for a direct reply", () => {
+  it("skips child raw dispatch when main and the child are co-mentioned for a direct reply", () => {
     setFeishuBotOpenIdForTesting("main", "ou_main");
     setFeishuBotOpenIdForTesting("flink-sre", "ou_flink");
 
@@ -95,7 +95,7 @@ describe("shouldSkipDispatchForMentionPolicy", () => {
           }),
         }),
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("does not skip non-main accounts when only main is mentioned", () => {
@@ -155,7 +155,7 @@ describe("shouldSkipDispatchForMentionPolicy", () => {
     ).toBe(true);
   });
 
-  it("does not skip child dispatch when main and the child are mentioned in a peer collaboration request", () => {
+  it("skips child raw dispatch when main and the child are mentioned in a peer collaboration request", () => {
     setFeishuBotOpenIdForTesting("main", "ou_main");
     setFeishuBotOpenIdForTesting("flink-sre", "ou_flink");
 
@@ -173,7 +173,40 @@ describe("shouldSkipDispatchForMentionPolicy", () => {
           }),
         }),
       }),
+    ).toBe(true);
+  });
+
+  it("keeps main as the raw entry for explicit peer collaboration with declared specialists", () => {
+    setFeishuBotOpenIdForTesting("main", "ou_main");
+    setFeishuBotOpenIdForTesting("flink-sre", "ou_flink");
+    setFeishuBotOpenIdForTesting("starrocks-sre", "ou_starrocks");
+    botNames.set("flink-sre", "Flink-SRE");
+    botNames.set("starrocks-sre", "Starrocks-SRE");
+
+    expect(
+      shouldSkipDispatchForMentionPolicy({
+        accountId: "main",
+        currentBotOpenId: "ou_main",
+        event: makeGroupEvent({
+          mentions: [{ openId: "ou_main", name: "首席大管家", key: "@_user_1" }],
+          content: JSON.stringify({
+            text: "#协作(Flink-SRE,Starrocks-SRE) 你俩继续讨论什么是灵魂",
+          }),
+        }),
+      }),
     ).toBe(false);
+    expect(
+      shouldSkipDispatchForMentionPolicy({
+        accountId: "flink-sre",
+        currentBotOpenId: "ou_flink",
+        event: makeGroupEvent({
+          mentions: [{ openId: "ou_main", name: "首席大管家", key: "@_user_1" }],
+          content: JSON.stringify({
+            text: "#协作(Flink-SRE,Starrocks-SRE) 你俩继续讨论什么是灵魂",
+          }),
+        }),
+      }),
+    ).toBe(true);
   });
 
   it("does not skip main when it is co-mentioned for a direct reply", () => {
@@ -254,7 +287,7 @@ describe("shouldSkipDispatchForMentionPolicy", () => {
     ).toBe(false);
   });
 
-  it("skips main dispatch when multiple specialist bots are mentioned without main", () => {
+  it("keeps main as the raw entry when multiple specialist bots are co-addressed", () => {
     setFeishuBotOpenIdForTesting("main", "ou_main");
     setFeishuBotOpenIdForTesting("flink-sre", "ou_flink");
     setFeishuBotOpenIdForTesting("starrocks-sre", "ou_starrocks");
@@ -270,10 +303,10 @@ describe("shouldSkipDispatchForMentionPolicy", () => {
           ],
         }),
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
-  it("keeps specialist dispatch when multiple specialist bots are mentioned without main", () => {
+  it("skips specialist raw dispatch when multiple specialist bots are co-addressed", () => {
     setFeishuBotOpenIdForTesting("main", "ou_main");
     setFeishuBotOpenIdForTesting("flink-sre", "ou_flink");
     setFeishuBotOpenIdForTesting("starrocks-sre", "ou_starrocks");
@@ -289,7 +322,7 @@ describe("shouldSkipDispatchForMentionPolicy", () => {
           ],
         }),
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("skips main when only a sibling bot name is recognized but open_id mapping does not match", () => {
@@ -309,7 +342,7 @@ describe("shouldSkipDispatchForMentionPolicy", () => {
     ).toBe(true);
   });
 
-  it("skips main when sibling bot names are referenced only in plain text", () => {
+  it("keeps main as the raw entry when sibling bot names are referenced only in plain text", () => {
     setFeishuBotOpenIdForTesting("main", "ou_main");
     setFeishuBotOpenIdForTesting("flink-sre", "ou_flink");
     setFeishuBotOpenIdForTesting("starrocks-sre", "ou_starrocks");
@@ -326,6 +359,6 @@ describe("shouldSkipDispatchForMentionPolicy", () => {
           }),
         }),
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 });

@@ -1,6 +1,7 @@
 import { listFeishuAccountIds, resolveFeishuAccount } from "./accounts.js";
 import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { extractMentionedBotAccountIds, extractMentionedOpenIds, type FeishuMessageEvent } from "./bot.js";
+import { classifyGroupCoAddressMode } from "./mention.js";
 import { shouldSkipDispatchForMentionPolicy } from "./monitor.account.js";
 
 export type SyntheticMention = {
@@ -44,6 +45,22 @@ export function filterSyntheticDispatchAccountIds(params: {
   );
   const mainMentioned = mentionedBotAccountIds.has("main");
   const hasAnyInternalBotMention = mentionedBotAccountIds.size > 0 || extractMentionedOpenIds(event).length > 0;
+  const coAddressMode = classifyGroupCoAddressMode({
+    event,
+    mentionedBotCount: mentionedBotAccountIds.size,
+    mainMentioned,
+  });
+  if (coAddressMode !== "none") {
+    return candidateAccountIds.filter(
+      (accountId) =>
+        !shouldSkipDispatchForMentionPolicy({
+          accountId,
+          event,
+          botOpenIdMap,
+          botNameMap,
+        }),
+    );
+  }
   return candidateAccountIds.filter((accountId) => {
     if (
       shouldSkipDispatchForMentionPolicy({

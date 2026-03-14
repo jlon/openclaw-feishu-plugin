@@ -58,6 +58,7 @@ export type FeishuMessageContext = {
   visibleMentionTargets?: MentionTarget[];
   groupCoAddressMode?: GroupCoAddressMode;
   explicitGroupCoAddressMode?: Exclude<GroupCoAddressMode, "none">;
+  groupCoAddressParticipants?: string[];
   collaboration?: CollaborationRuntimeContext;
 };
 

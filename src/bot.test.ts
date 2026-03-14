@@ -173,12 +173,13 @@ describe("buildFeishuAgentBody", () => {
         collaboration: {
           taskId: "task_peer_initial",
           mode: "peer_collab",
+          protocol: "scripted_peer",
           phase: "initial_assessment",
           participants: ["flink-sre", "starrocks-sre"],
           currentOwner: undefined,
           speakerToken: undefined,
           isCurrentOwner: false,
-          allowedActions: ["collab_assess"],
+          allowedActions: [],
         },
       },
       botOpenId: "ou_flink",
@@ -186,10 +187,11 @@ describe("buildFeishuAgentBody", () => {
       agentId: "flink-sre",
     });
 
-    expect(body).toContain("Do not ask the user follow-up questions during initial assessment.");
+    expect(body).toContain("Do not ask the user follow-up questions");
     expect(body).toContain(
-      "Visible reply should be exactly one short sentence about what you will inspect from your own side.",
+      "Visible reply should be exactly one short sentence with your first judgment from your own role.",
     );
+    expect(body).not.toContain('"action":"collab_assess"');
   });
 
   it("uses scripted peer guidance without hidden control blocks for explicit collaboration", () => {
@@ -669,15 +671,7 @@ describe("handleFeishuMessage command authorization", () => {
     }
   });
 
-  it("dispatches a visible handoff turn to the target agent after source owner hands off", async () => {
-    mockResolveAgentRoute.mockReturnValue({
-      agentId: "flink-sre",
-      channel: "feishu",
-      accountId: "flink-sre",
-      sessionKey: "agent:flink-sre:feishu:group:oc-group",
-      mainSessionKey: "agent:main:main",
-      matchedBy: "explicit",
-    });
+  it("dispatches handoff accept to the target agent after a coordinated handoff", async () => {
     mockCreateFeishuReplyDispatcher.mockImplementation((params) => ({
       dispatcher: {
         markComplete: vi.fn(),
@@ -687,167 +681,9 @@ describe("handleFeishuMessage command authorization", () => {
       markDispatchIdle: vi.fn(),
       _params: params,
     }));
-    botOpenIds.set("flink-sre", "ou_flink");
+    botOpenIds.set("main", "ou_main");
     botOpenIds.set("starrocks-sre", "ou_starrocks");
-    botNames.set("flink-sre", "Flink-SRE");
-    botNames.set("starrocks-sre", "Starrocks-SRE");
-
-    const state = ensureCollaborationState({
-      chatId: "oc-group",
-      messageId: "msg-peer",
-      mode: "peer_collab",
-      participants: ["flink-sre", "starrocks-sre"],
-    });
-    applyCollaborationActions([
-      {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "flink-sre",
-        ownershipClaim: "owner_candidate",
-      },
-      {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "starrocks-sre",
-        ownershipClaim: "supporting",
-      },
-    ]);
-
-    let dispatchCount = 0;
-    let taskId = "";
-    mockDispatchReplyFromConfig.mockImplementation(async ({ ctx }: { ctx: Record<string, string> }) => {
-      dispatchCount += 1;
-      taskId ||= ctx.CollaborationTaskId;
-      if (dispatchCount === 1) {
-        applyCollaborationActions([
-          {
-            action: "agent_handoff",
-            taskId: ctx.CollaborationTaskId,
-            handoffId: "handoff_1",
-            fromAgentId: "flink-sre",
-            targetAgentId: "starrocks-sre",
-            timeWindow: "18:20-18:35",
-            currentFinding: "sink 吞吐下降",
-            unresolvedQuestion: "查询层是否是独立源头",
-            evidencePaths: ["shared/tasks/task_x/evidence/02-compute.md"],
-          },
-        ]);
-      }
-      return { queuedFinal: false, counts: { final: 1 } };
-    });
-
-    const cfg: ClawdbotConfig = {
-      channels: {
-        feishu: {
-          enabled: true,
-          defaultAccount: "flink-sre",
-          accounts: {
-            "flink-sre": {
-              enabled: true,
-              appId: "app_flink",
-              appSecret: "secret_flink",
-              groupPolicy: "open",
-              requireMention: true,
-              renderMode: "raw",
-              streaming: false,
-            },
-            "starrocks-sre": {
-              enabled: true,
-              appId: "app_starrocks",
-              appSecret: "secret_starrocks",
-              groupPolicy: "open",
-              requireMention: true,
-              renderMode: "raw",
-              streaming: false,
-            },
-          },
-        },
-      },
-      agents: {
-        list: [{ id: "flink-sre" }, { id: "starrocks-sre" }],
-      },
-    } as ClawdbotConfig;
-
-    const event: FeishuMessageEvent = {
-      sender: {
-        sender_id: {
-          open_id: "ou-user",
-        },
-      },
-      message: {
-        message_id: "msg-peer",
-        chat_id: "oc-group",
-        chat_type: "group",
-        message_type: "text",
-        content: JSON.stringify({
-          text: '<at user_id="ou_flink">Flink-SRE</at> <at user_id="ou_starrocks">Starrocks-SRE</at> 你俩一起看下这条链路，先各自说判断，再互相补充',
-        }),
-        mentions: [
-          { key: "@_user_1", name: "Flink-SRE", id: { open_id: "ou_flink" } },
-          { key: "@_user_2", name: "Starrocks-SRE", id: { open_id: "ou_starrocks" } },
-        ],
-      },
-    };
-
-    await handleFeishuMessage({
-      cfg,
-      event,
-      accountId: "flink-sre",
-      botOpenId: "ou_flink",
-      botName: "Flink-SRE",
-      runtime: createRuntimeEnv(),
-    });
-
-    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(2);
-    expect(mockCreateFeishuReplyDispatcher).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        agentId: "starrocks-sre",
-        accountId: "starrocks-sre",
-        mentionTargets: undefined,
-        visibleMentionTargets: [
-          expect.objectContaining({
-            openId: "ou_flink",
-            name: "Flink-SRE",
-          }),
-        ],
-      }),
-    );
-    expect(mockDispatchReplyFromConfig).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          AccountId: "starrocks-sre",
-          CollaborationPhase: "awaiting_accept",
-          CollaborationCurrentOwner: "flink-sre",
-          CollaborationActiveHandoffTarget: "starrocks-sre",
-          CollaborationAllowedActions:
-            "agent_handoff_accept,agent_handoff_reject,agent_handoff_need_info",
-        }),
-      }),
-    );
-    const collaborationSessionKeys = mockFinalizeInboundContext.mock.calls
-      .map((call: unknown[]) => call[0] as { SessionKey?: string; CollaborationTaskId?: string })
-      .filter((ctx) => typeof ctx.CollaborationTaskId === "string");
-    expect(collaborationSessionKeys.length).toBeGreaterThan(0);
-    for (const ctx of collaborationSessionKeys) {
-      expect(ctx.SessionKey).toContain(`:task:${ctx.CollaborationTaskId}`);
-    }
-  });
-
-  it("dispatches handoff accept and next-owner followup after an owner hands off", async () => {
-    mockCreateFeishuReplyDispatcher.mockImplementation((params) => ({
-      dispatcher: {
-        markComplete: vi.fn(),
-        waitForIdle: vi.fn(async () => {}),
-      },
-      replyOptions: {},
-      markDispatchIdle: vi.fn(),
-      _params: params,
-    }));
-    botOpenIds.set("flink-sre", "ou_flink");
-    botOpenIds.set("starrocks-sre", "ou_starrocks");
-    botNames.set("flink-sre", "Flink-SRE");
+    botNames.set("main", "首席大管家");
     botNames.set("starrocks-sre", "Starrocks-SRE");
 
     let dispatchCount = 0;
@@ -858,42 +694,18 @@ describe("handleFeishuMessage command authorization", () => {
       if (dispatchCount == 1) {
         applyCollaborationActions([
           {
-            action: "collab_assess",
-            taskId: ctx.CollaborationTaskId,
-            agentId: "flink-sre",
-            ownershipClaim: "owner_candidate",
-            currentFinding: "Flink 侧先给观点",
-            nextCheck: "等待 StarRocks-SRE",
-            needsWorker: false,
-          },
-        ]);
-      } else if (dispatchCount == 2) {
-        applyCollaborationActions([
-          {
-            action: "collab_assess",
-            taskId: ctx.CollaborationTaskId,
-            agentId: "starrocks-sre",
-            ownershipClaim: "supporting",
-            currentFinding: "StarRocks 侧补一条观点",
-            nextCheck: "等待 owner 继续",
-            needsWorker: false,
-          },
-        ]);
-      } else if (dispatchCount == 3) {
-        applyCollaborationActions([
-          {
             action: "agent_handoff",
             taskId: ctx.CollaborationTaskId,
             handoffId: "handoff_chain_1",
-            fromAgentId: "flink-sre",
+            fromAgentId: "main",
             targetAgentId: "starrocks-sre",
             timeWindow: "",
-            currentFinding: "请 StarRocks-SRE 从查询服务角度继续",
-            unresolvedQuestion: "请 StarRocks-SRE 从查询服务角度继续",
+            currentFinding: "请 StarRocks-SRE 继续",
+            unresolvedQuestion: "请 StarRocks-SRE 继续",
             evidencePaths: [],
           },
         ]);
-      } else if (dispatchCount == 4) {
+      } else if (dispatchCount == 2) {
         const state = getCollaborationStateForTesting(ctx.CollaborationTaskId);
         const handoffId = state?.activeHandoffState?.handoffId;
         if (!handoffId) {
@@ -926,15 +738,6 @@ describe("handleFeishuMessage command authorization", () => {
               renderMode: "raw",
               streaming: false,
             },
-            "flink-sre": {
-              enabled: true,
-              appId: "app_flink",
-              appSecret: "secret_flink",
-              groupPolicy: "open",
-              requireMention: true,
-              renderMode: "raw",
-              streaming: false,
-            },
             "starrocks-sre": {
               enabled: true,
               appId: "app_starrocks",
@@ -948,7 +751,7 @@ describe("handleFeishuMessage command authorization", () => {
         },
       },
       agents: {
-        list: [{ id: "main" }, { id: "flink-sre" }, { id: "starrocks-sre" }],
+        list: [{ id: "main" }, { id: "starrocks-sre" }],
       },
     } as ClawdbotConfig;
 
@@ -964,74 +767,45 @@ describe("handleFeishuMessage command authorization", () => {
         chat_type: "group",
         message_type: "text",
         content: JSON.stringify({
-          text: '<at user_id="ou_flink">Flink-SRE</at> <at user_id="ou_starrocks">Starrocks-SRE</at> 你俩协作讨论这个问题',
+          text: '<at user_id="ou_main">首席大管家</at> #编排(Starrocks-SRE) 帮我安排并汇总这次排查',
         }),
         mentions: [
-          { key: "@_user_1", name: "Flink-SRE", id: { open_id: "ou_flink" } },
-          { key: "@_user_2", name: "Starrocks-SRE", id: { open_id: "ou_starrocks" } },
+          { key: "@_user_1", name: "首席大管家", id: { open_id: "ou_main" } },
         ],
       },
     };
 
     mockResolveAgentRoute.mockReturnValue({
-      agentId: "flink-sre",
+      agentId: "main",
       channel: "feishu",
-      accountId: "flink-sre",
-      sessionKey: "agent:flink-sre:feishu:group:oc-group",
+      accountId: "main",
+      sessionKey: "agent:main:feishu:group:oc-group",
       mainSessionKey: "agent:main:main",
       matchedBy: "explicit",
     });
     await handleFeishuMessage({
       cfg,
       event,
-      accountId: "flink-sre",
-      botOpenId: "ou_flink",
-      botName: "Flink-SRE",
+      accountId: "main",
+      botOpenId: "ou_main",
+      botName: "首席大管家",
       runtime: createRuntimeEnv(),
     });
 
-    mockResolveAgentRoute.mockReturnValue({
-      agentId: "starrocks-sre",
-      channel: "feishu",
-      accountId: "starrocks-sre",
-      sessionKey: "agent:starrocks-sre:feishu:group:oc-group",
-      mainSessionKey: "agent:main:main",
-      matchedBy: "explicit",
-    });
-    await handleFeishuMessage({
-      cfg,
-      event,
-      accountId: "starrocks-sre",
-      botOpenId: "ou_starrocks",
-      botName: "Starrocks-SRE",
-      runtime: createRuntimeEnv(),
-    });
-
-    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(5);
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(2);
     expect(mockDispatchReplyFromConfig).toHaveBeenNthCalledWith(
-      4,
+      2,
       expect.objectContaining({
         ctx: expect.objectContaining({
           AccountId: "starrocks-sre",
           MessageSid: expect.stringContaining("::handoff::"),
           CollaborationPhase: "awaiting_accept",
-          CollaborationCurrentOwner: "flink-sre",
+          CollaborationCurrentOwner: "main",
+          CollaborationMode: "coordinate",
+          CollaborationParticipants: "starrocks-sre",
           CollaborationActiveHandoffTarget: "starrocks-sre",
           CollaborationAllowedActions:
             "agent_handoff_accept,agent_handoff_reject,agent_handoff_need_info",
-        }),
-      }),
-    );
-    expect(mockDispatchReplyFromConfig).toHaveBeenNthCalledWith(
-      5,
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          AccountId: "starrocks-sre",
-          MessageSid: expect.stringContaining("::owner::"),
-          CollaborationPhase: "active_collab",
-          CollaborationCurrentOwner: "starrocks-sre",
-          CollaborationIsCurrentOwner: true,
-          CollaborationAllowedActions: "agent_handoff,agent_handoff_complete",
         }),
       }),
     );
@@ -1136,7 +910,7 @@ describe("handleFeishuMessage command authorization", () => {
         chat_type: "group",
         message_type: "text",
         content: JSON.stringify({
-          text: '<at user_id="ou_flink">Flink-SRE</at> <at user_id="ou_starrocks">Starrocks-SRE</at> 你俩协作排查这个链路',
+          text: '<at user_id="ou_flink">Flink-SRE</at> <at user_id="ou_starrocks">Starrocks-SRE</at> #协作 你俩协作排查这个链路',
         }),
         mentions: [
           { key: "@_user_1", name: "Flink-SRE", id: { open_id: "ou_flink" } },
@@ -1179,9 +953,11 @@ describe("handleFeishuMessage command authorization", () => {
       runtime: createRuntimeEnv(),
     });
 
-    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(3);
-    expect(mockDispatchReplyFromConfig).toHaveBeenNthCalledWith(
-      3,
+    const ownerKickoffCalls = mockDispatchReplyFromConfig.mock.calls
+      .map((call) => call[0] as { ctx: Record<string, string> })
+      .filter((call) => call.ctx.MessageSid?.includes("::owner::"));
+    expect(ownerKickoffCalls.length).toBeGreaterThanOrEqual(1);
+    expect(ownerKickoffCalls[0]).toEqual(
       expect.objectContaining({
         ctx: expect.objectContaining({
           AccountId: "flink-sre",
@@ -1189,13 +965,15 @@ describe("handleFeishuMessage command authorization", () => {
           CollaborationPhase: "active_collab",
           CollaborationCurrentOwner: "flink-sre",
           CollaborationIsCurrentOwner: true,
-          CollaborationAllowedActions: "agent_handoff,agent_handoff_complete",
+          CollaborationMode: "peer_collab",
         }),
       }),
     );
-    const ownerKickoffParams = mockCreateFeishuReplyDispatcher.mock.calls[2]?.[0] as
-      | { visibleMentionTargets?: Array<{ openId: string; name: string }> }
-      | undefined;
+    const ownerKickoffParams = mockCreateFeishuReplyDispatcher.mock.calls
+      .map((call) => call[0] as { visibleMentionTargets?: Array<{ openId: string; name: string }> })
+      .find((call) =>
+        (call.visibleMentionTargets ?? []).some((target) => target.openId === "ou_starrocks"),
+      );
     expect(ownerKickoffParams?.visibleMentionTargets).toEqual([
       expect.objectContaining({ openId: "ou_starrocks", name: "Starrocks-SRE" }),
     ]);
@@ -1353,9 +1131,11 @@ describe("handleFeishuMessage command authorization", () => {
       runtime: createRuntimeEnv(),
     });
 
-    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(6);
-    expect(mockDispatchReplyFromConfig).toHaveBeenNthCalledWith(
-      3,
+    const ownerCalls = mockDispatchReplyFromConfig.mock.calls
+      .map((call) => call[0] as { ctx: Record<string, string> })
+      .filter((call) => call.ctx.MessageSid?.includes("::owner::"));
+    expect(ownerCalls.length).toBeGreaterThanOrEqual(4);
+    expect(ownerCalls[0]).toEqual(
       expect.objectContaining({
         ctx: expect.objectContaining({
           AccountId: "flink-sre",
@@ -1366,8 +1146,7 @@ describe("handleFeishuMessage command authorization", () => {
         }),
       }),
     );
-    expect(mockDispatchReplyFromConfig).toHaveBeenNthCalledWith(
-      4,
+    expect(ownerCalls[1]).toEqual(
       expect.objectContaining({
         ctx: expect.objectContaining({
           AccountId: "starrocks-sre",
@@ -1378,8 +1157,7 @@ describe("handleFeishuMessage command authorization", () => {
         }),
       }),
     );
-    expect(mockDispatchReplyFromConfig).toHaveBeenNthCalledWith(
-      5,
+    expect(ownerCalls[2]).toEqual(
       expect.objectContaining({
         ctx: expect.objectContaining({
           AccountId: "flink-sre",
@@ -1390,8 +1168,7 @@ describe("handleFeishuMessage command authorization", () => {
         }),
       }),
     );
-    expect(mockDispatchReplyFromConfig).toHaveBeenNthCalledWith(
-      6,
+    expect(ownerCalls[3]).toEqual(
       expect.objectContaining({
         ctx: expect.objectContaining({
           AccountId: "starrocks-sre",
@@ -1443,353 +1220,6 @@ describe("handleFeishuMessage command authorization", () => {
     )?.ctx?.CollaborationTaskId;
     expect(taskId).toBeTruthy();
     expect(getCollaborationStateForTesting(taskId!)?.phase).toBe("completed");
-  });
-
-  it("continues peer collaboration after a delayed handoff accept updates state", async () => {
-    mockCreateFeishuReplyDispatcher.mockImplementation((params) => ({
-      dispatcher: {
-        markComplete: vi.fn(),
-        waitForIdle: vi.fn(async () => {}),
-      },
-      replyOptions: {},
-      markDispatchIdle: vi.fn(),
-      _params: params,
-    }));
-    botOpenIds.set("flink-sre", "ou_flink");
-    botOpenIds.set("starrocks-sre", "ou_starrocks");
-    botNames.set("flink-sre", "Flink-SRE");
-    botNames.set("starrocks-sre", "Starrocks-SRE");
-
-    let dispatchCount = 0;
-    mockDispatchReplyFromConfig.mockImplementation(async ({ ctx }: { ctx: Record<string, string> }) => {
-      dispatchCount += 1;
-      if (dispatchCount === 1) {
-        applyCollaborationActions([
-          {
-            action: "collab_assess",
-            taskId: ctx.CollaborationTaskId,
-            agentId: "flink-sre",
-            ownershipClaim: "owner_candidate",
-            currentFinding: "从实时计算视角先给一个定义",
-            nextCheck: "补一层运行态恢复视角",
-            needsWorker: false,
-          },
-        ]);
-      } else if (dispatchCount === 2) {
-        applyCollaborationActions([
-          {
-            action: "collab_assess",
-            taskId: ctx.CollaborationTaskId,
-            agentId: "starrocks-sre",
-            ownershipClaim: "supporting",
-            currentFinding: "从存储视角补一句定义",
-            nextCheck: "等待接棒",
-            needsWorker: false,
-          },
-        ]);
-      } else if (dispatchCount === 3) {
-        applyCollaborationActions([
-          {
-            action: "agent_handoff",
-            taskId: ctx.CollaborationTaskId,
-            handoffId: "handoff_delayed_accept",
-            fromAgentId: "flink-sre",
-            targetAgentId: "starrocks-sre",
-            timeWindow: "",
-            currentFinding: "请从存储/查询视角补一层",
-            unresolvedQuestion: "请从存储/查询视角补一层",
-            evidencePaths: [],
-          },
-        ]);
-      } else if (dispatchCount === 4) {
-        setTimeout(() => {
-          applyCollaborationActions([
-            {
-              action: "agent_handoff_accept",
-              taskId: ctx.CollaborationTaskId,
-              handoffId: "handoff_delayed_accept",
-              agentId: "starrocks-sre",
-            },
-          ]);
-        }, 10);
-      }
-      return { queuedFinal: true, counts: { final: 1 } };
-    });
-
-    const cfg: ClawdbotConfig = {
-      channels: {
-        feishu: {
-          enabled: true,
-          defaultAccount: "flink-sre",
-          accounts: {
-            "flink-sre": {
-              enabled: true,
-              appId: "app_flink",
-              appSecret: "secret_flink",
-              groupPolicy: "open",
-              requireMention: true,
-              renderMode: "raw",
-              streaming: false,
-            },
-            "starrocks-sre": {
-              enabled: true,
-              appId: "app_starrocks",
-              appSecret: "secret_starrocks",
-              groupPolicy: "open",
-              requireMention: true,
-              renderMode: "raw",
-              streaming: false,
-            },
-          },
-        },
-      },
-      agents: {
-        list: [{ id: "flink-sre" }, { id: "starrocks-sre" }],
-      },
-    } as ClawdbotConfig;
-
-    const event: FeishuMessageEvent = {
-      sender: {
-        sender_id: {
-          open_id: "ou-user",
-        },
-      },
-      message: {
-        message_id: "msg-peer-delayed-accept-followup",
-        chat_id: "oc-group",
-        chat_type: "group",
-        message_type: "text",
-        content: JSON.stringify({
-          text: '<at user_id="ou_flink">Flink-SRE</at> <at user_id="ou_starrocks">Starrocks-SRE</at> 你俩协作讨论什么是灵魂，先各自判断，再互相补充，最后形成一句结论',
-        }),
-        mentions: [
-          { key: "@_user_1", name: "Flink-SRE", id: { open_id: "ou_flink" } },
-          { key: "@_user_2", name: "Starrocks-SRE", id: { open_id: "ou_starrocks" } },
-        ],
-      },
-    };
-
-    mockResolveAgentRoute.mockReturnValue({
-      agentId: "flink-sre",
-      channel: "feishu",
-      accountId: "flink-sre",
-      sessionKey: "agent:flink-sre:feishu:group:oc-group",
-      mainSessionKey: "agent:main:main",
-      matchedBy: "explicit",
-    });
-    await handleFeishuMessage({
-      cfg,
-      event,
-      accountId: "flink-sre",
-      botOpenId: "ou_flink",
-      botName: "Flink-SRE",
-      runtime: createRuntimeEnv(),
-    });
-
-    mockResolveAgentRoute.mockReturnValue({
-      agentId: "starrocks-sre",
-      channel: "feishu",
-      accountId: "starrocks-sre",
-      sessionKey: "agent:starrocks-sre:feishu:group:oc-group",
-      mainSessionKey: "agent:main:main",
-      matchedBy: "explicit",
-    });
-    await handleFeishuMessage({
-      cfg,
-      event,
-      accountId: "starrocks-sre",
-      botOpenId: "ou_starrocks",
-      botName: "Starrocks-SRE",
-      runtime: createRuntimeEnv(),
-    });
-
-    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(5);
-    expect(mockDispatchReplyFromConfig).toHaveBeenNthCalledWith(
-      5,
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          AccountId: "starrocks-sre",
-          MessageSid: expect.stringContaining("::owner::"),
-          CollaborationPhase: "active_collab",
-          CollaborationCurrentOwner: "starrocks-sre",
-          CollaborationIsCurrentOwner: true,
-          CollaborationAllowedActions: "agent_handoff,agent_handoff_complete",
-        }),
-      }),
-    );
-  });
-
-  it("does not dispatch an extra owner followup when handoff accept also completes the task", async () => {
-    mockCreateFeishuReplyDispatcher.mockImplementation((params) => ({
-      dispatcher: {
-        markComplete: vi.fn(),
-        waitForIdle: vi.fn(async () => {}),
-      },
-      replyOptions: {},
-      markDispatchIdle: vi.fn(),
-      _params: params,
-    }));
-    botOpenIds.set("flink-sre", "ou_flink");
-    botOpenIds.set("starrocks-sre", "ou_starrocks");
-    botNames.set("flink-sre", "Flink-SRE");
-    botNames.set("starrocks-sre", "Starrocks-SRE");
-
-    let dispatchCount = 0;
-    let taskId = "";
-    mockDispatchReplyFromConfig.mockImplementation(async ({ ctx }: { ctx: Record<string, string> }) => {
-      dispatchCount += 1;
-      taskId ||= ctx.CollaborationTaskId;
-      if (dispatchCount === 1) {
-        applyCollaborationActions([
-          {
-            action: "collab_assess",
-            taskId: ctx.CollaborationTaskId,
-            agentId: "flink-sre",
-            ownershipClaim: "owner_candidate",
-            currentFinding: "先给第一判断",
-            nextCheck: "等待另一侧补充",
-            needsWorker: false,
-          },
-        ]);
-      } else if (dispatchCount === 2) {
-        applyCollaborationActions([
-          {
-            action: "collab_assess",
-            taskId: ctx.CollaborationTaskId,
-            agentId: "starrocks-sre",
-            ownershipClaim: "supporting",
-            currentFinding: "补一层持久化视角",
-            nextCheck: "等待接棒",
-            needsWorker: false,
-          },
-        ]);
-      } else if (dispatchCount === 3) {
-        applyCollaborationActions([
-          {
-            action: "agent_handoff",
-            taskId: ctx.CollaborationTaskId,
-            handoffId: "handoff_complete_inline",
-            fromAgentId: "flink-sre",
-            targetAgentId: "starrocks-sre",
-            timeWindow: "",
-            currentFinding: "请直接形成最终结论",
-            unresolvedQuestion: "请直接形成最终结论",
-            evidencePaths: [],
-          },
-        ]);
-      } else if (dispatchCount === 4) {
-        applyCollaborationActions([
-          {
-            action: "agent_handoff_accept",
-            taskId: ctx.CollaborationTaskId,
-            handoffId: "handoff_complete_inline",
-            agentId: "starrocks-sre",
-            completionStatus: "complete",
-            finalConclusion: "最终结论",
-          },
-        ]);
-      }
-      return { queuedFinal: true, counts: { final: 1 } };
-    });
-
-    const cfg: ClawdbotConfig = {
-      channels: {
-        feishu: {
-          enabled: true,
-          defaultAccount: "flink-sre",
-          accounts: {
-            "flink-sre": {
-              enabled: true,
-              appId: "app_flink",
-              appSecret: "secret_flink",
-              groupPolicy: "open",
-              requireMention: true,
-              renderMode: "raw",
-              streaming: false,
-            },
-            "starrocks-sre": {
-              enabled: true,
-              appId: "app_starrocks",
-              appSecret: "secret_starrocks",
-              groupPolicy: "open",
-              requireMention: true,
-              renderMode: "raw",
-              streaming: false,
-            },
-          },
-        },
-      },
-      agents: {
-        list: [{ id: "flink-sre" }, { id: "starrocks-sre" }],
-      },
-    } as ClawdbotConfig;
-
-    const event: FeishuMessageEvent = {
-      sender: {
-        sender_id: {
-          open_id: "ou-user",
-        },
-      },
-      message: {
-        message_id: "msg-peer-inline-complete",
-        chat_id: "oc-group",
-        chat_type: "group",
-        message_type: "text",
-        content: JSON.stringify({
-          text: '<at user_id="ou_flink">Flink-SRE</at> <at user_id="ou_starrocks">Starrocks-SRE</at> 你俩协作讨论什么是灵魂，最后形成一句结论',
-        }),
-        mentions: [
-          { key: "@_user_1", name: "Flink-SRE", id: { open_id: "ou_flink" } },
-          { key: "@_user_2", name: "Starrocks-SRE", id: { open_id: "ou_starrocks" } },
-        ],
-      },
-    };
-
-    mockResolveAgentRoute.mockReturnValue({
-      agentId: "flink-sre",
-      channel: "feishu",
-      accountId: "flink-sre",
-      sessionKey: "agent:flink-sre:feishu:group:oc-group",
-      mainSessionKey: "agent:main:main",
-      matchedBy: "explicit",
-    });
-    await handleFeishuMessage({
-      cfg,
-      event,
-      accountId: "flink-sre",
-      botOpenId: "ou_flink",
-      botName: "Flink-SRE",
-      runtime: createRuntimeEnv(),
-    });
-
-    mockResolveAgentRoute.mockReturnValue({
-      agentId: "starrocks-sre",
-      channel: "feishu",
-      accountId: "starrocks-sre",
-      sessionKey: "agent:starrocks-sre:feishu:group:oc-group",
-      mainSessionKey: "agent:main:main",
-      matchedBy: "explicit",
-    });
-    await handleFeishuMessage({
-      cfg,
-      event,
-      accountId: "starrocks-sre",
-      botOpenId: "ou_starrocks",
-      botName: "Starrocks-SRE",
-      runtime: createRuntimeEnv(),
-    });
-
-    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(4);
-    expect(taskId).toBeTruthy();
-    expect(getCollaborationStateForTesting(taskId)).toEqual(
-      expect.objectContaining({
-        phase: "completed",
-        currentOwner: "starrocks-sre",
-        speakerToken: undefined,
-        handoffCount: 1,
-        activeHandoffState: undefined,
-      }),
-    );
   });
 
   it("fans out coordinate specialist turns in parallel after the coordinator reply", async () => {
@@ -2095,19 +1525,13 @@ describe("handleFeishuMessage command authorization", () => {
         chat_type: "group",
         message_type: "text",
         content: JSON.stringify({
-          text: '<at user_id="ou_flink">@_user_1</at> <at user_id="ou_starrocks">@_user_2</at> 你俩协作排查下',
+          text: '<at user_id="ou_main">首席大管家</at> #协作(Flink-SRE,Starrocks-SRE) 你俩协作排查下',
         }),
         mentions: [
           {
             key: "@_user_1",
-            id: { open_id: "ou_flink" },
-            name: "Flink-SRE",
-            tenant_key: "",
-          },
-          {
-            key: "@_user_2",
-            id: { open_id: "ou_starrocks" },
-            name: "Starrocks-SRE",
+            id: { open_id: "ou_main" },
+            name: "首席大管家",
             tenant_key: "",
           },
         ],
@@ -2116,38 +1540,75 @@ describe("handleFeishuMessage command authorization", () => {
     const cfg: ClawdbotConfig = {
       channels: {
         feishu: {
+          enabled: true,
+          defaultAccount: "main",
           collaboration: {
             maxHops: 2,
           },
+          accounts: {
+            main: {
+              enabled: true,
+              appId: "app_main",
+              appSecret: "secret_main",
+              groupPolicy: "open",
+              requireMention: false,
+              renderMode: "raw",
+              streaming: false,
+            },
+            "flink-sre": {
+              enabled: true,
+              appId: "app_flink",
+              appSecret: "secret_flink",
+              groupPolicy: "open",
+              requireMention: true,
+              renderMode: "raw",
+              streaming: false,
+            },
+            "starrocks-sre": {
+              enabled: true,
+              appId: "app_starrocks",
+              appSecret: "secret_starrocks",
+              groupPolicy: "open",
+              requireMention: true,
+              renderMode: "raw",
+              streaming: false,
+            },
+          },
         },
+      },
+      agents: {
+        list: [{ id: "main" }, { id: "flink-sre" }, { id: "starrocks-sre" }],
       },
     } as ClawdbotConfig;
     mockResolveAgentRoute.mockReturnValue({
-      agentId: "flink-sre",
+      agentId: "main",
       channel: "feishu",
-      accountId: "flink-sre",
-      sessionKey: "agent:flink-sre:feishu:group:oc-group",
+      accountId: "main",
+      sessionKey: "agent:main:feishu:group:oc-group",
       mainSessionKey: "agent:main:main",
       matchedBy: "explicit",
     });
     await handleFeishuMessage({
       cfg,
       event,
-      accountId: "flink-sre",
-      botOpenId: "ou_flink",
-      botName: "Flink-SRE",
+      accountId: "main",
+      botOpenId: "ou_main",
+      botName: "首席大管家",
       runtime: createRuntimeEnv(),
     });
-    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        CollaborationTaskId: expect.stringMatching(/^task_[0-9a-f]{12}$/),
-        CollaborationRuntimeManaged: "true",
-        CollaborationHandoffCount: 0,
-        CollaborationMaxHops: 2,
-        CollaborationRecentTurns: undefined,
-        CollaborationOwnLastVisibleTurn: undefined,
+    expect(
+      mockFinalizeInboundContext.mock.calls.some(([ctx]) => {
+        const payload = ctx as Record<string, string | undefined>;
+        return (
+          typeof payload.CollaborationTaskId === "string" &&
+          payload.CollaborationRuntimeManaged === "true" &&
+          payload.CollaborationHandoffCount === 0 &&
+          payload.CollaborationMaxHops === 2 &&
+          payload.CollaborationRecentTurns === undefined &&
+          payload.CollaborationOwnLastVisibleTurn === undefined
+        );
       }),
-    );
+    ).toBe(true);
   });
 
   it("adds visible mention targets for coordinate main dispatch and specialist fan-out", async () => {

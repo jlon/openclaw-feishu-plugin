@@ -101,6 +101,7 @@ export type CollaborationState = {
   scriptedTotalTurns?: number;
   scriptedDispatchedTurnKey?: string;
   lastSpeakerId?: string;
+  peerAssessmentDispatchedAgents: string[];
   coordinateDispatchedAgents: string[];
   assessments: Record<string, CollaborationAssessment>;
   activeHandoffState?: CollaborationActiveHandoffState;
@@ -252,10 +253,7 @@ export function ensureCollaborationState(params: {
     return nextState;
   }
   const taskId = buildCollaborationTaskId(params);
-  const protocol =
-    params.mode === "peer_collab" && params.explicitMode === "peer_collab"
-      ? "scripted_peer"
-      : "legacy_handoff";
+  const protocol = params.mode === "peer_collab" ? "scripted_peer" : "legacy_handoff";
   const nextState: CollaborationState = {
     stateKey,
     taskId,
@@ -267,6 +265,7 @@ export function ensureCollaborationState(params: {
     handoffCount: 0,
     currentOwner: params.mode === "coordinate" ? "main" : undefined,
     speakerToken: params.mode === "coordinate" ? "main" : undefined,
+    peerAssessmentDispatchedAgents: [],
     coordinateDispatchedAgents: [],
     assessments: {},
     recentVisibleTurns: [],
@@ -300,18 +299,7 @@ export function markScriptedPeerAssessmentComplete(
       },
     },
   });
-  const allAssessed = nextState.participants.every((participant) => Boolean(nextState.assessments[participant]));
-  if (!allAssessed) {
-    return nextState;
-  }
-  return replaceState({
-    ...nextState,
-    phase: "active_collab",
-    currentOwner: nextState.participants[0],
-    speakerToken: nextState.participants[0],
-    scriptedTurnIndex: 0,
-    scriptedTotalTurns: computeScriptedPeerTotalTurns(nextState.participants.length, nextState.maxHops),
-  });
+  return maybeAdvanceState(nextState);
 }
 
 
@@ -672,6 +660,9 @@ export function applyCollaborationActions(actions: CollaborationControlAction[])
     if (action.action === "collab_assess" && !state.participants.includes(action.agentId)) {
       continue;
     }
+    if (state.protocol === "scripted_peer") {
+      continue;
+    }
     if (action.action === "collab_assess") {
       const nextState: CollaborationState = {
         ...state,
@@ -909,6 +900,51 @@ export function claimPendingCoordinateParticipants(taskId: string): {
   const nextState = replaceState({
     ...state,
     coordinateDispatchedAgents: [...state.coordinateDispatchedAgents, ...targets],
+  });
+  return {
+    state: nextState,
+    targets,
+  };
+}
+
+export function claimPendingPeerAssessmentParticipants(params: {
+  taskId: string;
+  dispatchedAgentId?: string;
+}): {
+  state?: CollaborationState;
+  targets: string[];
+} {
+  sweepExpiredCollaborationStates();
+  const state = collaborationStateByTaskId.get(params.taskId);
+  if (
+    !state ||
+    state.mode !== "peer_collab" ||
+    state.phase !== "initial_assessment" ||
+    state.protocol !== "scripted_peer"
+  ) {
+    return {
+      state,
+      targets: [],
+    };
+  }
+  const dispatched = new Set(state.peerAssessmentDispatchedAgents);
+  const normalizedDispatchedAgentId = params.dispatchedAgentId?.trim();
+  if (normalizedDispatchedAgentId && state.participants.includes(normalizedDispatchedAgentId)) {
+    dispatched.add(normalizedDispatchedAgentId);
+  }
+  const targets = state.participants.filter((agentId) => !dispatched.has(agentId));
+  if (
+    targets.length === 0 &&
+    state.peerAssessmentDispatchedAgents.length === dispatched.size
+  ) {
+    return {
+      state,
+      targets,
+    };
+  }
+  const nextState = replaceState({
+    ...state,
+    peerAssessmentDispatchedAgents: [...dispatched, ...targets],
   });
   return {
     state: nextState,

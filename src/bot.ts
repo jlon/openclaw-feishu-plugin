@@ -22,6 +22,8 @@ import { downloadMessageResourceFeishu } from "./media.js";
 import {
   classifyGroupCoAddressMode,
   extractMentionTargets,
+  extractEventText,
+  resolveExplicitGroupCoAddressParticipants,
   stripExplicitGroupCoAddressMode,
   isMentionForwardRequest,
   type MentionTarget,
@@ -39,6 +41,7 @@ import { getMessageFeishu, sendMessageFeishu } from "./send.js";
 import {
   advanceScriptedPeerTurn,
   buildCollaborationRuntimeContext,
+  claimPendingPeerAssessmentParticipants,
   claimScriptedPeerTurnDispatch,
   claimPendingCoordinateParticipants,
   getCollaborationState,
@@ -1257,20 +1260,37 @@ export async function handleFeishuMessage(params: {
   let collaborationState:
     | ReturnType<typeof resolveCollaborationStateForMessage>
     | undefined;
+  let mentionedBotAccountIds: string[] = [];
   if (isGroup) {
-    const mentionedBotAccountIds = extractMentionedBotAccountIds({
+    const detectedMentionedBotAccountIds = extractMentionedBotAccountIds({
       event,
       botOpenIdMap: botOpenIds,
       botNameMap: botNames,
     });
-    const mainMentioned = mentionedBotAccountIds.includes("main");
+    const explicitGroupParticipants = resolveExplicitGroupCoAddressParticipants({
+      text: extractEventText(event),
+      knownAccountIds: [...botOpenIds.keys()],
+      botNameMap: botNames,
+    });
+    mentionedBotAccountIds =
+      explicitGroupParticipants.length > 0
+        ? explicitGroupParticipants
+        : detectedMentionedBotAccountIds;
+    const mainMentioned =
+      explicitGroupParticipants.length > 0
+        ? explicitGroupParticipants.includes("main") || ctx.explicitGroupCoAddressMode === "coordinate"
+        : mentionedBotAccountIds.includes("main");
     const groupCoAddressMode = classifyGroupCoAddressMode({
       event,
       mentionedBotCount: mentionedBotAccountIds.length,
       mainMentioned,
     });
     if (groupCoAddressMode !== "none") {
-      ctx = { ...ctx, groupCoAddressMode };
+      ctx = {
+        ...ctx,
+        groupCoAddressMode,
+        groupCoAddressParticipants: mentionedBotAccountIds,
+      };
       if (groupCoAddressMode === "peer_collab" || groupCoAddressMode === "coordinate") {
         const collaborationMaxHops =
           feishuCfg?.accounts?.[account.accountId]?.collaboration?.maxHops ??
@@ -1874,6 +1894,187 @@ export async function handleFeishuMessage(params: {
         return buildVisibleMentionTargetsForAgents(otherParticipants);
       };
 
+    const maybeDispatchPeerAssessmentParticipants = async (params: {
+      dispatchedAgentId?: string;
+    }) => {
+      if (!isGroup || !collaborationState) {
+        return;
+      }
+      const claim = claimPendingPeerAssessmentParticipants({
+        taskId: collaborationState.taskId,
+        dispatchedAgentId: params.dispatchedAgentId,
+      });
+      if (!claim.state || claim.targets.length === 0) {
+        return;
+      }
+      const dispatchTarget = async (targetAgentId: string) => {
+        const targetState = getCollaborationState(claim.state!.taskId) ?? claim.state!;
+        const targetAccountId = resolveHandoffTargetAccountId(targetAgentId);
+        const targetSessionKey = buildCollaborationSessionKey(
+          core.channel.routing.buildAgentSessionKey({
+            agentId: targetAgentId,
+            channel: "feishu",
+            peer: {
+              kind: isGroup ? "group" : "direct",
+              id: peerId,
+            },
+          }),
+          targetState.taskId,
+        );
+        const targetCtxPayload = buildCtxPayloadForAgent(
+          targetSessionKey,
+          targetAccountId,
+          true,
+          targetAgentId,
+          {
+            collaborationStateOverride: targetState,
+            autoMentionTargetsOverride: false,
+            mentionTargetsOverride: undefined,
+            visibleMentionTargetsOverride: buildPeerCollabVisibleMentionTargets(
+              targetState,
+              targetAgentId,
+            ),
+            messageIdOverride: `${ctx.messageId}::peer-init::${targetState.taskId}::${targetAgentId}`,
+          },
+        );
+        const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
+          cfg,
+          agentId: targetAgentId,
+          runtime: runtime as RuntimeEnv,
+          chatId: ctx.chatId,
+          replyToMessageId: replyTargetMessageId,
+          skipReplyToInMessages: !isGroup,
+          replyInThread,
+          rootId: ctx.rootId,
+          threadReply,
+          mentionTargets: undefined,
+          visibleMentionTargets: buildPeerCollabVisibleMentionTargets(targetState, targetAgentId),
+          collaborationTaskId: targetState.taskId,
+          accountId: targetAccountId,
+          messageCreateTimeMs,
+        });
+        log(
+          `feishu[${account.accountId}]: peer assessment dispatch -> ${targetAgentId} (session=${targetSessionKey})`,
+        );
+        await runCollaborationDispatchWithRetry({
+          log: (message) => log(`feishu[${account.accountId}]: ${message}`),
+          run: () =>
+            core.channel.reply.withReplyDispatcher({
+              dispatcher,
+              onSettled: () => {
+                markDispatchIdle();
+              },
+              run: () =>
+                core.channel.reply.dispatchReplyFromConfig({
+                  ctx: targetCtxPayload,
+                  cfg,
+                  dispatcher,
+                  replyOptions,
+                }),
+            }),
+        });
+        if (targetState.protocol === "scripted_peer") {
+          collaborationState =
+            markScriptedPeerAssessmentComplete(targetState.taskId, normalizeAgentId(targetAgentId)) ??
+            collaborationState;
+        }
+      };
+      const results = await Promise.allSettled(claim.targets.map(dispatchTarget));
+      for (let i = 0; i < results.length; i += 1) {
+        if (results[i].status === "rejected") {
+          log(
+            `feishu[${account.accountId}]: peer assessment dispatch failed for ${claim.targets[i]}: ${String((results[i] as PromiseRejectedResult).reason)}`,
+          );
+        }
+      }
+      const latestState = getCollaborationState(claim.state.taskId);
+      if (latestState) {
+        collaborationState = latestState;
+      }
+    };
+
+    const maybeDispatchDirectReplyParticipants = async () => {
+      if (
+        !isGroup ||
+        normalizeAgentId(route.agentId) !== "main" ||
+        ctx.groupCoAddressMode !== "direct_reply"
+      ) {
+        return false;
+      }
+      const participants = (ctx.groupCoAddressParticipants ?? []).filter(
+        (participant) => normalizeAgentId(participant) !== "main",
+      );
+      if (participants.length === 0) {
+        return false;
+      }
+      const dispatchTarget = async (targetAgentId: string) => {
+        const targetAccountId = resolveHandoffTargetAccountId(targetAgentId);
+        const targetSessionKey = core.channel.routing.buildAgentSessionKey({
+          agentId: targetAgentId,
+          channel: "feishu",
+          peer: {
+            kind: isGroup ? "group" : "direct",
+            id: peerId,
+          },
+        });
+        const targetVisibleMentionTargets = buildVisibleMentionTargetsForAgents(
+          participants.filter((participant) => normalizeAgentId(participant) !== normalizeAgentId(targetAgentId)),
+        );
+        const targetCtxPayload = buildCtxPayloadForAgent(
+          targetSessionKey,
+          targetAccountId,
+          true,
+          targetAgentId,
+          {
+            autoMentionTargetsOverride: false,
+            mentionTargetsOverride: undefined,
+            visibleMentionTargetsOverride: targetVisibleMentionTargets,
+            messageIdOverride: `${ctx.messageId}::direct-reply::${targetAgentId}`,
+          },
+        );
+        const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
+          cfg,
+          agentId: targetAgentId,
+          runtime: runtime as RuntimeEnv,
+          chatId: ctx.chatId,
+          replyToMessageId: replyTargetMessageId,
+          skipReplyToInMessages: !isGroup,
+          replyInThread,
+          rootId: ctx.rootId,
+          threadReply,
+          mentionTargets: undefined,
+          visibleMentionTargets: targetVisibleMentionTargets,
+          accountId: targetAccountId,
+          messageCreateTimeMs,
+        });
+        log(
+          `feishu[${account.accountId}]: direct-reply participant dispatch -> ${targetAgentId} (session=${targetSessionKey})`,
+        );
+        await core.channel.reply.withReplyDispatcher({
+          dispatcher,
+          onSettled: () => {
+            markDispatchIdle();
+          },
+          run: () =>
+            core.channel.reply.dispatchReplyFromConfig({
+              ctx: targetCtxPayload,
+              cfg,
+              dispatcher,
+              replyOptions,
+            }),
+        });
+      };
+      const results = await Promise.allSettled(participants.map(dispatchTarget));
+      for (let i = 0; i < results.length; i += 1) {
+        if (results[i].status === "rejected") {
+          log(
+            `feishu[${account.accountId}]: direct-reply participant dispatch failed for ${participants[i]}: ${String((results[i] as PromiseRejectedResult).reason)}`,
+          );
+        }
+      }
+      return !((ctx.groupCoAddressParticipants ?? []).some((participant) => normalizeAgentId(participant) === "main"));
+    };
+
     const maybeDispatchPendingHandoff = async (params: {
       sourceAgentId: string;
       previousHandoffId?: string;
@@ -1882,9 +2083,11 @@ export async function handleFeishuMessage(params: {
         return;
       }
       const latestState = getCollaborationState(collaborationState.taskId);
+      if (!latestState || latestState.protocol === "scripted_peer") {
+        return;
+      }
       const activeHandoff = latestState?.activeHandoffState;
       if (
-        !latestState ||
         latestState.phase !== "awaiting_accept" ||
         !activeHandoff ||
         activeHandoff.handoffId === params.previousHandoffId ||
@@ -1960,18 +2163,6 @@ export async function handleFeishuMessage(params: {
               }),
           }),
       });
-      if (latestState.protocol === "scripted_peer") {
-        const advancedState = advanceScriptedPeerTurn(latestState.taskId, ownerAgentId);
-        if (!advancedState || advancedState.phase === "completed") {
-          return;
-        }
-        await maybeDispatchCurrentOwnerFollowup({
-          previousPhase: latestState.phase,
-          previousOwner: latestState.currentOwner,
-          previousSpeakerToken: latestState.speakerToken,
-        });
-        return;
-      }
       await waitForCollaborationStateChange({
         taskId: latestState.taskId,
         previousPhase,
@@ -2368,8 +2559,26 @@ export async function handleFeishuMessage(params: {
       );
     } else {
       // --- Single-agent dispatch (existing behavior) ---
+      const normalizedRouteAgentId = normalizeAgentId(route.agentId);
+      const peerCollabOrchestratedByMain =
+        isGroup &&
+        normalizedRouteAgentId === "main" &&
+        collaborationState?.mode === "peer_collab" &&
+        !collaborationState.participants.includes("main");
+      if (peerCollabOrchestratedByMain) {
+        await maybeDispatchPeerAssessmentParticipants({});
+        await maybeDispatchCurrentOwnerFollowup({
+          previousPhase: collaborationState?.phase,
+          previousOwner: collaborationState?.currentOwner,
+          previousSpeakerToken: collaborationState?.speakerToken,
+        });
+        return;
+      }
+      if (await maybeDispatchDirectReplyParticipants()) {
+        return;
+      }
       const initialVisibleMentionTargets =
-        collaborationState?.mode === "coordinate" && normalizeAgentId(route.agentId) === "main"
+        collaborationState?.mode === "coordinate" && normalizedRouteAgentId === "main"
           ? buildVisibleMentionTargetsForAgents(
               collaborationState.participants.filter(
                 (participant) => normalizeAgentId(participant) !== "main",
@@ -2402,7 +2611,7 @@ export async function handleFeishuMessage(params: {
         replyInThread,
         rootId: ctx.rootId,
         threadReply,
-        mentionTargets: normalizeAgentId(route.agentId) === "main" ? undefined : ctx.mentionTargets,
+        mentionTargets: normalizedRouteAgentId === "main" ? undefined : ctx.mentionTargets,
         visibleMentionTargets: initialVisibleMentionTargets,
         collaborationTaskId: collaborationState?.taskId,
         accountId: account.accountId,
@@ -2447,9 +2656,13 @@ export async function handleFeishuMessage(params: {
         collaborationState =
           markScriptedPeerAssessmentComplete(
             collaborationState.taskId,
-            normalizeAgentId(route.agentId),
+            normalizedRouteAgentId,
           ) ?? collaborationState;
       }
+      await maybeDispatchPeerAssessmentParticipants({
+        dispatchedAgentId:
+          collaborationState?.phase === "initial_assessment" ? normalizedRouteAgentId : undefined,
+      });
       await maybeDispatchCoordinateParticipants();
       await maybeDispatchCurrentOwnerFollowup({
         previousPhase: previousCollaborationPhase,

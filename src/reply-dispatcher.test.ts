@@ -298,8 +298,9 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     const state = ensureCollaborationState({
       chatId: "oc_chat",
       messageId: "msg_1",
-      mode: "peer_collab",
-      participants: ["flink-sre", "starrocks-sre"],
+      mode: "coordinate",
+      participants: ["main", "flink-sre", "starrocks-sre"],
+      maxHops: 3,
     });
     createFeishuReplyDispatcher({
       cfg: {} as never,
@@ -385,8 +386,9 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     const state = ensureCollaborationState({
       chatId: "oc_chat",
       messageId: "msg_bare_json",
-      mode: "peer_collab",
-      participants: ["coder", "starrocks-sre"],
+      mode: "coordinate",
+      participants: ["main", "coder", "starrocks-sre"],
+      maxHops: 3,
     });
     createFeishuReplyDispatcher({
       cfg: {} as never,
@@ -452,26 +454,13 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     const state = ensureCollaborationState({
       chatId: "oc_chat",
       messageId: "msg_2",
-      mode: "peer_collab",
-      participants: ["flink-sre", "starrocks-sre"],
+      mode: "coordinate",
+      participants: ["main", "flink-sre", "starrocks-sre"],
+      maxHops: 3,
     });
-    applyCollaborationActions([
-      {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "flink-sre",
-        ownershipClaim: "owner_candidate",
-      },
-      {
-        action: "collab_assess",
-        taskId: state.taskId,
-        agentId: "starrocks-sre",
-        ownershipClaim: "supporting",
-      },
-    ]);
     createFeishuReplyDispatcher({
       cfg: {} as never,
-      agentId: "flink-sre",
+      agentId: "main",
       runtime: {} as never,
       chatId: "oc_chat",
     });
@@ -485,7 +474,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
             action: "agent_handoff",
             taskId: state.taskId,
             handoffId: "handoff_1",
-            fromAgentId: "flink-sre",
+            fromAgentId: "main",
             targetAgentId: "starrocks-sre",
             timeWindow: "18:20-18:35",
             currentFinding: "sink 吞吐下降",

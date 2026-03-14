@@ -21,7 +21,12 @@ import {
   tryRecordMessagePersistent,
   warmupDedupFromDisk,
 } from "./dedup.js";
-import { classifyGroupCoAddressMode, isMentionForwardRequest } from "./mention.js";
+import {
+  classifyGroupCoAddressMode,
+  extractEventText,
+  isMentionForwardRequest,
+  resolveExplicitGroupCoAddressParticipants,
+} from "./mention.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 import { botNames, botOpenIds } from "./monitor.state.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
@@ -253,6 +258,13 @@ export function shouldSkipDispatchForMentionPolicy(params: {
     botOpenIdMap,
     botNameMap,
   });
+  const explicitParticipants = resolveExplicitGroupCoAddressParticipants({
+    text: extractEventText(event),
+    knownAccountIds: [...botOpenIdMap.keys()],
+    botNameMap,
+  });
+  const effectiveMentionedBotAccountIds =
+    explicitParticipants.length > 0 ? explicitParticipants : mentionedBotAccountIds;
   const mentionedOpenIds = extractMentionedOpenIds(event);
   const currentMentionedByName = Boolean(
     normalizeBotIdentifier(botNameMap.get(accountId)) &&
@@ -261,18 +273,29 @@ export function shouldSkipDispatchForMentionPolicy(params: {
           normalizeBotIdentifier(mention.name) === normalizeBotIdentifier(botNameMap.get(accountId)),
       ),
   );
-  if (mentionedOpenIds.length === 0 && mentionedBotAccountIds.length === 0) {
+  if (mentionedOpenIds.length === 0 && effectiveMentionedBotAccountIds.length === 0) {
     return false;
   }
-  const mainMentioned = mentionedBotAccountIds.includes(PRIMARY_FEISHU_ACCOUNT_ID);
-  const specialistMentionCount = mentionedBotAccountIds.filter(
+  const mainMentioned =
+    explicitParticipants.length > 0
+      ? explicitParticipants.includes(PRIMARY_FEISHU_ACCOUNT_ID) ||
+        classifyGroupCoAddressMode({
+          event,
+          mentionedBotCount: explicitParticipants.length,
+          mainMentioned: explicitParticipants.includes(PRIMARY_FEISHU_ACCOUNT_ID),
+        }) === "coordinate"
+      : effectiveMentionedBotAccountIds.includes(PRIMARY_FEISHU_ACCOUNT_ID);
+  const specialistMentionCount = effectiveMentionedBotAccountIds.filter(
     (id) => id !== PRIMARY_FEISHU_ACCOUNT_ID,
   ).length;
   const coAddressMode = classifyGroupCoAddressMode({
     event,
-    mentionedBotCount: mentionedBotAccountIds.length,
+    mentionedBotCount: effectiveMentionedBotAccountIds.length,
     mainMentioned,
   });
+  if (coAddressMode !== "none") {
+    return accountId !== PRIMARY_FEISHU_ACCOUNT_ID;
+  }
   const currentMentioned = Boolean(
     (currentBotOpenId?.trim() && mentionedOpenIds.includes(currentBotOpenId.trim())) ||
       currentMentionedByName,

@@ -155,7 +155,7 @@ describe("e2e harness helpers", () => {
       botNameMap: botNames,
     });
 
-    expect(targets).toEqual(["flink-sre", "starrocks-sre"]);
+    expect(targets).toEqual(["main"]);
   });
 
   it("routes default synthetic group messages only to main", () => {
