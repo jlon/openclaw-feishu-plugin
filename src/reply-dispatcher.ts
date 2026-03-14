@@ -10,6 +10,7 @@ import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import {
   applyCollaborationActions,
+  markCoordinateParticipantCompleted,
   parseCollaborationControlBlocks,
   recordCollaborationVisibleTurn,
 } from "./collaboration.js";
@@ -387,11 +388,19 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
         if (shouldDeliverText) {
           if (info?.kind === "final" && params.collaborationTaskId) {
-            recordCollaborationVisibleTurn({
+            const latestState = recordCollaborationVisibleTurn({
               taskId: params.collaborationTaskId,
               agentId,
               text,
             });
+            if (
+              latestState?.mode === "coordinate" &&
+              agentId !== "main" &&
+              latestState.participants.includes(agentId) &&
+              !latestState.coordinateCompletedAgents.includes(agentId)
+            ) {
+              markCoordinateParticipantCompleted(params.collaborationTaskId, agentId);
+            }
           }
           const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
 

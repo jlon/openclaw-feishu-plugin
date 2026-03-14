@@ -502,6 +502,38 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
   });
 
+  it("marks coordinate specialists complete after a visible final reply even without explicit completion control blocks", async () => {
+    const state = ensureCollaborationState({
+      chatId: "oc_chat_coordinate_visible_complete",
+      messageId: "msg_coordinate_visible_complete",
+      mode: "coordinate",
+      participants: ["main", "flink-sre", "starrocks-sre"],
+      maxHops: 3,
+    });
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "flink-sre",
+      runtime: {} as never,
+      chatId: "oc_chat_coordinate_visible_complete",
+      collaborationTaskId: state.taskId,
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls.at(-1)?.[0];
+    await options.deliver(
+      {
+        text: "从 Flink 视角先看到这里，lag 和 checkpoint 都已经确认。",
+      },
+      { kind: "final" },
+    );
+
+    expect(getCollaborationStateForTesting(state.taskId)).toEqual(
+      expect.objectContaining({
+        coordinateCompletedAgents: ["flink-sre"],
+        coordinateSummaryPending: false,
+      }),
+    );
+  });
+
   it("auto-mentions handoff target in visible replies when no explicit mention targets are provided", async () => {
     const state = ensureCollaborationState({
       chatId: "oc_chat",

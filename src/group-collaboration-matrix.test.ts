@@ -4,6 +4,7 @@ import { resolveCollaborationStateForMessage } from "./collaboration.js";
 import {
   classifyGroupCoAddressMode,
   resolveExplicitGroupCoAddressParticipants,
+  resolveGroupIntentForEventWithActiveThread,
 } from "./mention.js";
 import { botNames } from "./monitor.state.js";
 import {
@@ -373,6 +374,34 @@ describe("group collaboration matrix", () => {
     });
     expect(classifyGroupCoAddressMode({ event: event as any, mentionedBotCount: 2, mainMentioned: false })).toBe(
       "peer_collab",
+    );
+  });
+
+  it("8d. active thread follow-up can upgrade to coordinate without re-mentioning bots", () => {
+    const event = makeEvent({
+      text: "最后给我一个结论",
+      rootId: "om_thread_upgrade_root",
+      threadId: "om_thread_upgrade_root",
+      messageId: "msg_thread_upgrade_followup",
+    });
+    const intent = resolveGroupIntentForEventWithActiveThread({
+      event: event as any,
+      botOpenIdMap: new Map([
+        ["main", "ou_main"],
+        ["flink-sre", "ou_flink"],
+        ["starrocks-sre", "ou_sr"],
+      ]),
+      mainAccountId: "main",
+      activeThreadState: {
+        mode: "peer_collab",
+        participants: ["flink-sre", "starrocks-sre"],
+      },
+    });
+    expect(intent).toEqual(
+      expect.objectContaining({
+        mode: "coordinate",
+        participants: ["main", "flink-sre", "starrocks-sre"],
+      }),
     );
   });
 

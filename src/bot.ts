@@ -50,7 +50,7 @@ import {
   claimPendingCoordinateParticipants,
   completeCoordinateSummary,
   getCollaborationState,
-  getActiveCollaborationStateForThread,
+  getActiveCollaborationIntentForThread,
   resolveCollaborationStateForMessage,
   resolveNextPeerAutoSpeaker,
   type CollaborationRuntimeContext,
@@ -1175,7 +1175,7 @@ export async function handleFeishuMessage(params: {
   let mentionedBotAccountIds: string[] = [];
   let groupIntent: GroupCoAddressIntent | undefined;
   if (isGroup) {
-    const activeThreadState = getActiveCollaborationStateForThread({
+    const activeThreadIntent = getActiveCollaborationIntentForThread({
       chatId: event.message.chat_id,
       rootId: event.message.root_id,
       threadId: event.message.thread_id,
@@ -1187,13 +1187,7 @@ export async function handleFeishuMessage(params: {
         botOpenIdMap: botOpenIds,
         botNameMap: botNames,
         mainAccountId: "main",
-        activeThreadState:
-          activeThreadState?.mode === "peer_collab" || activeThreadState?.mode === "coordinate"
-            ? {
-                mode: activeThreadState.mode,
-                participants: activeThreadState.participants,
-              }
-            : undefined,
+        activeThreadState: activeThreadIntent,
       });
     mentionedBotAccountIds = groupIntent.rawParticipants;
     const groupCoAddressMode = groupIntent.mode;

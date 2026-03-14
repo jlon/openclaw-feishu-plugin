@@ -153,6 +153,91 @@ describe("collaboration state", () => {
     expect(second.taskId).not.toBe(first.taskId);
   });
 
+  it("migrates an active thread task when the same discussion upgrades to coordinate", () => {
+    const first = resolveCollaborationStateForMessage({
+      event: {
+        message: {
+          chat_id: "oc_group_thread_upgrade",
+          root_id: "om_root_upgrade",
+          thread_id: "om_thread_upgrade",
+          message_id: "om_user_msg_1",
+        },
+      } as any,
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre"],
+      maxHops: 2,
+    });
+    applyCollaborationActions([
+      {
+        action: "collab_assess",
+        taskId: first.taskId,
+        agentId: "flink-sre",
+        ownershipClaim: "owner_candidate",
+      },
+      {
+        action: "collab_assess",
+        taskId: first.taskId,
+        agentId: "starrocks-sre",
+        ownershipClaim: "supporting",
+      },
+    ]);
+
+    const second = resolveCollaborationStateForMessage({
+      event: {
+        message: {
+          chat_id: "oc_group_thread_upgrade",
+          root_id: "om_root_upgrade",
+          thread_id: "om_thread_upgrade",
+          message_id: "om_user_msg_2",
+        },
+      } as any,
+      mode: "coordinate",
+      participants: ["main", "flink-sre", "starrocks-sre"],
+      maxHops: 3,
+    });
+
+    expect(second.taskId).toBe(first.taskId);
+    expect(second.mode).toBe("coordinate");
+    expect(second.phase).toBe("active_collab");
+    expect(second.currentOwner).toBe("main");
+    expect(second.participants).toEqual(["main", "flink-sre", "starrocks-sre"]);
+  });
+
+  it("migrates an active thread task when a new participant is added with overlap", () => {
+    const first = resolveCollaborationStateForMessage({
+      event: {
+        message: {
+          chat_id: "oc_group_thread_expand",
+          root_id: "om_root_expand",
+          thread_id: "om_thread_expand",
+          message_id: "om_user_msg_1",
+        },
+      } as any,
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre"],
+      maxHops: 2,
+    });
+
+    const second = resolveCollaborationStateForMessage({
+      event: {
+        message: {
+          chat_id: "oc_group_thread_expand",
+          root_id: "om_root_expand",
+          thread_id: "om_thread_expand",
+          message_id: "om_user_msg_2",
+        },
+      } as any,
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre", "coder"],
+      maxHops: 3,
+    });
+
+    expect(second.taskId).toBe(first.taskId);
+    expect(second.mode).toBe("peer_collab");
+    expect(second.phase).toBe("initial_assessment");
+    expect(second.participants).toEqual(["flink-sre", "starrocks-sre", "coder"]);
+  });
+
   it("elects peer owner from real collab_assess claims instead of participant order", () => {
     const state = ensureCollaborationState({
       chatId: "oc_group_owner_claims",
@@ -366,12 +451,23 @@ describe("collaboration state", () => {
     const afterSecondTurn = advancePeerAutoTurn(state.taskId, "starrocks-sre");
     expect(afterSecondTurn).toEqual(
       expect.objectContaining({
-        phase: "completed",
-        currentOwner: "starrocks-sre",
-        speakerToken: undefined,
+        phase: "active_collab",
+        currentOwner: "flink-sre",
+        speakerToken: "flink-sre",
         autoTurnCount: 2,
         handoffCount: 0,
         lastSpeakerId: "starrocks-sre",
+      }),
+    );
+    const afterThirdTurn = advancePeerAutoTurn(state.taskId, "flink-sre");
+    expect(afterThirdTurn).toEqual(
+      expect.objectContaining({
+        phase: "completed",
+        currentOwner: "flink-sre",
+        speakerToken: undefined,
+        autoTurnCount: 3,
+        handoffCount: 0,
+        lastSpeakerId: "flink-sre",
       }),
     );
   });

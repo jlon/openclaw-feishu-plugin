@@ -18,7 +18,7 @@ import {
   tryRecordMessagePersistent,
   warmupDedupFromDisk,
 } from "./dedup.js";
-import { getActiveCollaborationStateForThread } from "./collaboration.js";
+import { getActiveCollaborationIntentForThread } from "./collaboration.js";
 import {
   extractMentionedBotAccountIds,
   extractMentionedOpenIds,
@@ -46,7 +46,7 @@ function resolveEffectiveGroupIntentForEvent(params: {
     return undefined;
   }
   const { botOpenIdMap = botOpenIds, botNameMap = botNames } = params;
-  const activeThreadState = getActiveCollaborationStateForThread({
+  const activeThreadState = getActiveCollaborationIntentForThread({
     chatId: params.event.message.chat_id,
     rootId: params.event.message.root_id,
     threadId: params.event.message.thread_id,
@@ -56,13 +56,7 @@ function resolveEffectiveGroupIntentForEvent(params: {
     botOpenIdMap,
     botNameMap,
     mainAccountId: PRIMARY_FEISHU_ACCOUNT_ID,
-    activeThreadState:
-      activeThreadState?.mode === "peer_collab" || activeThreadState?.mode === "coordinate"
-        ? {
-            mode: activeThreadState.mode,
-            participants: activeThreadState.participants,
-          }
-        : undefined,
+    activeThreadState,
   });
 }
 

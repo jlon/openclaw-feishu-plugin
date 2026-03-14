@@ -346,15 +346,26 @@ export function resolveGroupCoAddressIntent(params: {
     activeThreadMode,
     activeThreadParticipants,
   } = params;
+  const eventText = extractEventText(event);
   const explicitParticipants = resolveExplicitGroupCoAddressParticipants({
-    text: extractEventText(event),
+    text: eventText,
     knownAccountIds,
     botNameMap,
   });
   let rawParticipants = normalizeParticipants(
     explicitParticipants.length > 0 ? explicitParticipants : [...mentionedBotAccountIds],
   );
-  const explicitMode = extractExplicitGroupCoAddressMode(extractEventText(event));
+  const explicitMode = extractExplicitGroupCoAddressMode(eventText);
+  if (
+    rawParticipants.length === 0 &&
+    !explicitMode &&
+    activeThreadMode &&
+    activeThreadParticipants &&
+    activeThreadParticipants.length > 0 &&
+    eventText.trim().length > 0
+  ) {
+    rawParticipants = normalizeParticipants([mainAccountId, ...activeThreadParticipants]);
+  }
   let mode = classifyGroupCoAddressMode({
     event,
     mentionedBotCount: rawParticipants.length,
@@ -367,7 +378,7 @@ export function resolveGroupCoAddressIntent(params: {
     activeThreadMode &&
     activeThreadParticipants &&
     activeThreadParticipants.length > 0 &&
-    extractEventText(event).trim().length > 0
+    eventText.trim().length > 0
   ) {
     mode = activeThreadMode;
     rawParticipants = normalizeParticipants([mainAccountId, ...activeThreadParticipants]);

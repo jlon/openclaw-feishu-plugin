@@ -157,8 +157,8 @@ const CONTROL_BLOCK_PATTERN = /```openclaw-collab\s*([\s\S]*?)```/gu;
 const CONTROL_ACTION_NAME_PATTERN =
   /"action"\s*:\s*"(collab_assess|collab_report_complete|agent_handoff|agent_handoff_accept|agent_handoff_reject|agent_handoff_need_info|agent_handoff_cancel|agent_handoff_expire|agent_handoff_superseded|agent_handoff_complete)"/u;
 const PEER_AUTO_STOP_PATTERNS = [
-  /(^|[：:，,。\s])(结论|总结|综合来看|整体来看|所以|因此|最终|一句话结论|最终结论)/u,
-  /(已经|可以)(收口|总结|得出结论)/u,
+  /^\s*(最终结论|一句话结论|结论|总结)\s*[:：]/u,
+  /^\s*(综合来看|整体来看)[，,:：\s]/u,
 ];
 
 function hashText(input: string): string {
@@ -260,6 +260,59 @@ function haveSameParticipants(left: readonly string[], right: readonly string[])
   return normalizedLeft.every((value, index) => value === normalizedRight[index]);
 }
 
+function filterTurnsForParticipants(
+  turns: readonly CollaborationVisibleTurn[],
+  participants: readonly string[],
+): CollaborationVisibleTurn[] {
+  const allowed = new Set(participants);
+  return turns.filter((turn) => allowed.has(turn.agentId));
+}
+
+function migrateActiveThreadState(params: {
+  state: CollaborationState;
+  nextStateKey: string;
+  nextChatId: string;
+  nextThreadKey: string;
+  nextMessageId: string;
+  nextMode: CollaborationMode;
+  nextParticipants: string[];
+  nextMaxHops: number;
+}): CollaborationState {
+  const participants =
+    params.nextMode === "coordinate"
+      ? normalizeParticipants(
+          params.nextParticipants.includes("main")
+            ? params.nextParticipants
+            : ["main", ...params.nextParticipants],
+        )
+      : params.nextParticipants.filter((participant) => participant !== "main");
+  const recentVisibleTurns = filterTurnsForParticipants(params.state.recentVisibleTurns, participants);
+  return replaceState({
+    ...params.state,
+    stateKey: params.nextStateKey,
+    chatId: params.nextChatId,
+    threadKey: params.nextThreadKey,
+    originMessageId: params.nextMessageId,
+    mode: params.nextMode,
+    participants,
+    maxHops: Math.max(params.state.maxHops, params.nextMaxHops),
+    phase: params.nextMode === "coordinate" ? "active_collab" : "initial_assessment",
+    currentOwner: params.nextMode === "coordinate" ? "main" : undefined,
+    speakerToken: params.nextMode === "coordinate" ? "main" : undefined,
+    handoffCount: 0,
+    autoTurnCount: 0,
+    peerAssessmentDispatchedAgents: [],
+    coordinateDispatchedAgents: [],
+    coordinateCompletedAgents: [],
+    coordinateSummaryPending: false,
+    coordinateSummaryDispatchKey: undefined,
+    assessments: {},
+    activeHandoffState: undefined,
+    currentTurnDispatchKey: undefined,
+    recentVisibleTurns,
+  });
+}
+
 export function ensureCollaborationState(params: {
   chatId: string;
   rootId?: string;
@@ -290,19 +343,41 @@ export function ensureCollaborationState(params: {
     const existingThreadState = collaborationStateByTaskId.get(existingThreadTaskId);
     if (
       existingThreadState &&
-      !isTerminalCollaborationPhase(existingThreadState.phase) &&
-      existingThreadState.mode === params.mode &&
-      haveSameParticipants(existingThreadState.participants, normalizedParticipants)
+      !isTerminalCollaborationPhase(existingThreadState.phase)
     ) {
-      collaborationStateByKey.delete(existingThreadState.stateKey);
-      const nextState = replaceState({
-        ...existingThreadState,
-        stateKey,
-        chatId: params.chatId,
-        threadKey,
-        maxHops: Math.max(existingThreadState.maxHops, params.maxHops),
-      });
-      return nextState;
+      const overlappingParticipants = normalizedParticipants.filter((participant) =>
+        existingThreadState.participants.includes(participant),
+      );
+      const canReuseThreadTask =
+        haveSameParticipants(existingThreadState.participants, normalizedParticipants) &&
+        existingThreadState.mode === params.mode;
+      const canMigrateThreadTask =
+        !canReuseThreadTask &&
+        (overlappingParticipants.length > 0 || normalizedParticipants.length === 0);
+      if (canReuseThreadTask) {
+        collaborationStateByKey.delete(existingThreadState.stateKey);
+        return replaceState({
+          ...existingThreadState,
+          stateKey,
+          chatId: params.chatId,
+          threadKey,
+          originMessageId: params.messageId,
+          maxHops: Math.max(existingThreadState.maxHops, params.maxHops),
+        });
+      }
+      if (canMigrateThreadTask) {
+        collaborationStateByKey.delete(existingThreadState.stateKey);
+        return migrateActiveThreadState({
+          state: existingThreadState,
+          nextStateKey: stateKey,
+          nextChatId: params.chatId,
+          nextThreadKey: threadKey,
+          nextMessageId: params.messageId,
+          nextMode: params.mode,
+          nextParticipants: normalizedParticipants.length > 0 ? normalizedParticipants : existingThreadState.participants,
+          nextMaxHops: params.maxHops,
+        });
+      }
     }
   }
   const taskId = buildCollaborationTaskId(params);
@@ -366,7 +441,7 @@ export function recordCollaborationVisibleTurn(params: {
 }
 
 function computePeerAutoTurnLimit(state: CollaborationState): number {
-  return Math.max(1, state.participants.length - 1);
+  return Math.max(1, Math.max(1, state.participants.length - 1) * Math.max(1, state.maxHops));
 }
 
 function shouldStopPeerAutoTurn(state: CollaborationState, speakerAgentId: string): boolean {
@@ -1188,6 +1263,21 @@ export function getActiveCollaborationStateForThread(params: {
     return undefined;
   }
   return state;
+}
+
+export function getActiveCollaborationIntentForThread(params: {
+  chatId: string;
+  rootId?: string;
+  threadId?: string;
+}): { mode: Extract<GroupCoAddressMode, "peer_collab" | "coordinate">; participants: string[] } | undefined {
+  const state = getActiveCollaborationStateForThread(params);
+  if (!state || (state.mode !== "peer_collab" && state.mode !== "coordinate")) {
+    return undefined;
+  }
+  return {
+    mode: state.mode,
+    participants: state.participants,
+  };
 }
 
 export function getCollaborationStateForTesting(taskId: string): CollaborationState | undefined {
