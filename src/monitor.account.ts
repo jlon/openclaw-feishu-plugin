@@ -22,10 +22,8 @@ import {
   warmupDedupFromDisk,
 } from "./dedup.js";
 import {
-  classifyGroupCoAddressMode,
-  extractEventText,
   isMentionForwardRequest,
-  resolveExplicitGroupCoAddressParticipants,
+  resolveGroupCoAddressIntent,
 } from "./mention.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 import { botNames, botOpenIds } from "./monitor.state.js";
@@ -258,13 +256,14 @@ export function shouldSkipDispatchForMentionPolicy(params: {
     botOpenIdMap,
     botNameMap,
   });
-  const explicitParticipants = resolveExplicitGroupCoAddressParticipants({
-    text: extractEventText(event),
+  const groupIntent = resolveGroupCoAddressIntent({
+    event,
+    mentionedBotAccountIds,
     knownAccountIds: [...botOpenIdMap.keys()],
     botNameMap,
+    mainAccountId: PRIMARY_FEISHU_ACCOUNT_ID,
   });
-  const effectiveMentionedBotAccountIds =
-    explicitParticipants.length > 0 ? explicitParticipants : mentionedBotAccountIds;
+  const effectiveMentionedBotAccountIds = groupIntent.rawParticipants;
   const mentionedOpenIds = extractMentionedOpenIds(event);
   const currentMentionedByName = Boolean(
     normalizeBotIdentifier(botNameMap.get(accountId)) &&
@@ -276,23 +275,11 @@ export function shouldSkipDispatchForMentionPolicy(params: {
   if (mentionedOpenIds.length === 0 && effectiveMentionedBotAccountIds.length === 0) {
     return false;
   }
-  const mainMentioned =
-    explicitParticipants.length > 0
-      ? explicitParticipants.includes(PRIMARY_FEISHU_ACCOUNT_ID) ||
-        classifyGroupCoAddressMode({
-          event,
-          mentionedBotCount: explicitParticipants.length,
-          mainMentioned: explicitParticipants.includes(PRIMARY_FEISHU_ACCOUNT_ID),
-        }) === "coordinate"
-      : effectiveMentionedBotAccountIds.includes(PRIMARY_FEISHU_ACCOUNT_ID);
+  const mainMentioned = groupIntent.mainMentioned;
   const specialistMentionCount = effectiveMentionedBotAccountIds.filter(
     (id) => id !== PRIMARY_FEISHU_ACCOUNT_ID,
   ).length;
-  const coAddressMode = classifyGroupCoAddressMode({
-    event,
-    mentionedBotCount: effectiveMentionedBotAccountIds.length,
-    mainMentioned,
-  });
+  const coAddressMode = groupIntent.mode;
   if (coAddressMode !== "none") {
     return accountId !== PRIMARY_FEISHU_ACCOUNT_ID;
   }

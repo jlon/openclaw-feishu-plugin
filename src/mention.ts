@@ -17,6 +17,12 @@ export type MentionTarget = {
 };
 
 export type GroupCoAddressMode = "none" | "direct_reply" | "peer_collab" | "coordinate";
+export type GroupCoAddressIntent = {
+  mode: GroupCoAddressMode;
+  participants: string[];
+  rawParticipants: string[];
+  mainMentioned: boolean;
+};
 
 const EXPLICIT_GROUP_MODE_PATTERN = /(?:^|\s)#(直答|协作|编排)(?=\s|$)/u;
 const EXPLICIT_GROUP_MODE_WITH_PARTICIPANTS_PATTERN =
@@ -54,6 +60,10 @@ const GROUP_DIRECT_REPLY_PATTERNS = [
   /一个字描述/u,
   /一句话介绍/u,
 ];
+
+function normalizeParticipants(values: readonly string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
 
 function normalizeExplicitParticipantToken(value: string | undefined): string {
   return (value ?? "")
@@ -193,6 +203,52 @@ export function classifyGroupCoAddressMode(params: {
     return "direct_reply";
   }
   return "peer_collab";
+}
+
+export function resolveGroupCoAddressIntent(params: {
+  event: FeishuMessageEvent;
+  mentionedBotAccountIds: readonly string[];
+  knownAccountIds: readonly string[];
+  botNameMap?: ReadonlyMap<string, string>;
+  mainAccountId?: string;
+}): GroupCoAddressIntent {
+  const {
+    event,
+    mentionedBotAccountIds,
+    knownAccountIds,
+    botNameMap,
+    mainAccountId = "main",
+  } = params;
+  const explicitParticipants = resolveExplicitGroupCoAddressParticipants({
+    text: extractEventText(event),
+    knownAccountIds,
+    botNameMap,
+  });
+  const rawParticipants = normalizeParticipants(
+    explicitParticipants.length > 0 ? explicitParticipants : [...mentionedBotAccountIds],
+  );
+  const explicitMode = extractExplicitGroupCoAddressMode(extractEventText(event));
+  const mainMentioned =
+    rawParticipants.includes(mainAccountId) || explicitMode === "coordinate";
+  let mode = classifyGroupCoAddressMode({
+    event,
+    mentionedBotCount: rawParticipants.length,
+    mainMentioned,
+  });
+  let participants =
+    mode === "peer_collab"
+      ? rawParticipants.filter((participant) => participant !== mainAccountId)
+      : rawParticipants;
+  if (mode === "peer_collab" && participants.length < 2) {
+    mode = "direct_reply";
+    participants = rawParticipants;
+  }
+  return {
+    mode,
+    participants,
+    rawParticipants,
+    mainMentioned,
+  };
 }
 
 function extractMentionTargetsFromContent(

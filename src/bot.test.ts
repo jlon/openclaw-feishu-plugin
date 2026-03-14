@@ -173,7 +173,7 @@ describe("buildFeishuAgentBody", () => {
         collaboration: {
           taskId: "task_peer_initial",
           mode: "peer_collab",
-          protocol: "scripted_peer",
+          protocol: "runtime",
           phase: "initial_assessment",
           participants: ["flink-sre", "starrocks-sre"],
           currentOwner: undefined,
@@ -189,12 +189,12 @@ describe("buildFeishuAgentBody", () => {
 
     expect(body).toContain("Do not ask the user follow-up questions");
     expect(body).toContain(
-      "Visible reply should be exactly one short sentence with your first judgment from your own role.",
+      "Visible reply should be exactly one short sentence about what you will inspect from your own side.",
     );
-    expect(body).not.toContain('"action":"collab_assess"');
+    expect(body).toContain('"action":"collab_assess"');
   });
 
-  it("uses scripted peer guidance without hidden control blocks for explicit collaboration", () => {
+  it("uses runtime-managed peer guidance for explicit collaboration", () => {
     const body = buildFeishuAgentBody({
       ctx: {
         content: "user: @Flink-SRE @Starrocks-SRE 你俩讨论什么是灵魂",
@@ -206,7 +206,7 @@ describe("buildFeishuAgentBody", () => {
         collaboration: {
           taskId: "task_scripted_peer_initial",
           mode: "peer_collab",
-          protocol: "scripted_peer",
+          protocol: "runtime",
           phase: "initial_assessment",
           participants: ["flink-sre", "starrocks-sre"],
           handoffCount: 0,
@@ -220,16 +220,16 @@ describe("buildFeishuAgentBody", () => {
       agentId: "flink-sre",
     });
 
-    expect(body).toContain("This is a scripted peer collaboration round.");
     expect(body).toContain("CollaborationRuntimeManaged=true.");
     expect(body).toContain(
       "Runtime owns participant routing, visible @ display, turn order, and whether main should participate.",
     );
-    expect(body).not.toContain('"action":"collab_assess"');
-    expect(body).not.toContain("hidden control block");
+    expect(body).toContain("This is the initial assessment stage.");
+    expect(body).toContain('"action":"collab_assess"');
+    expect(body).toContain("hidden control block");
   });
 
-  it("injects recent visible turns into scripted peer prompts", () => {
+  it("injects recent visible turns into runtime peer prompts", () => {
     const body = buildFeishuAgentBody({
       ctx: {
         content: "user: @Flink-SRE @Starrocks-SRE 你俩讨论什么是灵魂",
@@ -241,7 +241,7 @@ describe("buildFeishuAgentBody", () => {
         collaboration: {
           taskId: "task_scripted_peer_recent_turns",
           mode: "peer_collab",
-          protocol: "scripted_peer",
+          protocol: "runtime",
           phase: "active_collab",
           participants: ["flink-sre", "starrocks-sre"],
           currentOwner: "starrocks-sre",
@@ -269,13 +269,10 @@ describe("buildFeishuAgentBody", () => {
       "RecentVisibleTurns=flink-sre: 灵魂像持续的身份认同。 | starrocks-sre: 还得补持久化和恢复。",
     );
     expect(body).toContain("YourPreviousVisibleTurn=还得补持久化和恢复。");
-    expect(body).toContain("do not act as if you have amnesia");
-    expect(body).toContain(
-      "Read RecentVisibleTurns first and continue from the latest visible point made by another participant instead of restarting the discussion.",
-    );
+    expect(body).toContain("Stay consistent with YourPreviousVisibleTurn unless you explicitly refine or revise it.");
   });
 
-  it("tells the final scripted peer speaker to synthesize and stop", () => {
+  it("tells the final runtime peer speaker to synthesize and stop", () => {
     const body = buildFeishuAgentBody({
       ctx: {
         content: "user: @Flink-SRE @Starrocks-SRE 你俩讨论什么是灵魂",
@@ -287,7 +284,7 @@ describe("buildFeishuAgentBody", () => {
         collaboration: {
           taskId: "task_scripted_peer_final",
           mode: "peer_collab",
-          protocol: "scripted_peer",
+          protocol: "runtime",
           phase: "active_collab",
           participants: ["flink-sre", "starrocks-sre"],
           currentOwner: "starrocks-sre",
@@ -306,9 +303,9 @@ describe("buildFeishuAgentBody", () => {
       agentId: "starrocks-sre",
     });
 
-    expect(body).toContain("This is the final scripted peer turn.");
-    expect(body).toContain("synthesize both sides into one concise concluding sentence");
-    expect(body).not.toContain('"action":"agent_handoff"');
+    expect(body).toContain("The handoff limit has been reached for this task.");
+    expect(body).toContain("Use the findings already gathered in this task to produce the best current conclusion you can from your role.");
+    expect(body).toContain("append exactly one hidden control block with action agent_handoff_complete");
   });
 
   it("forces direct reply turns to stay single-shot and non-delegating", () => {
@@ -986,7 +983,7 @@ describe("handleFeishuMessage command authorization", () => {
     }
   });
 
-  it("auto-advances scripted peer collaboration turns without hidden control blocks", async () => {
+  it("auto-advances runtime peer collaboration turns when no explicit handoff is emitted", async () => {
     mockCreateFeishuReplyDispatcher.mockImplementation((params) => ({
       dispatcher: {
         markComplete: vi.fn(),
@@ -1134,7 +1131,7 @@ describe("handleFeishuMessage command authorization", () => {
     const ownerCalls = mockDispatchReplyFromConfig.mock.calls
       .map((call) => call[0] as { ctx: Record<string, string> })
       .filter((call) => call.ctx.MessageSid?.includes("::owner::"));
-    expect(ownerCalls.length).toBeGreaterThanOrEqual(4);
+    expect(ownerCalls.length).toBe(2);
     expect(ownerCalls[0]).toEqual(
       expect.objectContaining({
         ctx: expect.objectContaining({
@@ -1157,28 +1154,6 @@ describe("handleFeishuMessage command authorization", () => {
         }),
       }),
     );
-    expect(ownerCalls[2]).toEqual(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          AccountId: "flink-sre",
-          MessageSid: expect.stringContaining("::owner::"),
-          CollaborationPhase: "active_collab",
-          CollaborationCurrentOwner: "flink-sre",
-          CollaborationIsCurrentOwner: true,
-        }),
-      }),
-    );
-    expect(ownerCalls[3]).toEqual(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          AccountId: "starrocks-sre",
-          MessageSid: expect.stringContaining("::owner::"),
-          CollaborationPhase: "active_collab",
-          CollaborationCurrentOwner: "starrocks-sre",
-          CollaborationIsCurrentOwner: true,
-        }),
-      }),
-    );
     const firstAssessmentParams = mockCreateFeishuReplyDispatcher.mock.calls[0]?.[0] as
       | { visibleMentionTargets?: Array<{ openId: string; name: string }> }
       | undefined;
@@ -1189,12 +1164,6 @@ describe("handleFeishuMessage command authorization", () => {
       | { visibleMentionTargets?: Array<{ openId: string; name: string }> }
       | undefined;
     const secondOwnerParams = mockCreateFeishuReplyDispatcher.mock.calls[3]?.[0] as
-      | { visibleMentionTargets?: Array<{ openId: string; name: string }> }
-      | undefined;
-    const thirdOwnerParams = mockCreateFeishuReplyDispatcher.mock.calls[4]?.[0] as
-      | { visibleMentionTargets?: Array<{ openId: string; name: string }> }
-      | undefined;
-    const fourthOwnerParams = mockCreateFeishuReplyDispatcher.mock.calls[5]?.[0] as
       | { visibleMentionTargets?: Array<{ openId: string; name: string }> }
       | undefined;
     expect(firstAssessmentParams?.visibleMentionTargets).toEqual([
@@ -1209,14 +1178,8 @@ describe("handleFeishuMessage command authorization", () => {
     expect(secondOwnerParams?.visibleMentionTargets).toEqual([
       expect.objectContaining({ openId: "ou_flink", name: "Flink-SRE" }),
     ]);
-    expect(thirdOwnerParams?.visibleMentionTargets).toEqual([
-      expect.objectContaining({ openId: "ou_starrocks", name: "Starrocks-SRE" }),
-    ]);
-    expect(fourthOwnerParams?.visibleMentionTargets).toEqual([
-      expect.objectContaining({ openId: "ou_flink", name: "Flink-SRE" }),
-    ]);
     const taskId = (
-      mockDispatchReplyFromConfig.mock.calls[4]?.[0] as { ctx?: Record<string, string> } | undefined
+      mockDispatchReplyFromConfig.mock.calls[3]?.[0] as { ctx?: Record<string, string> } | undefined
     )?.ctx?.CollaborationTaskId;
     expect(taskId).toBeTruthy();
     expect(getCollaborationStateForTesting(taskId!)?.phase).toBe("completed");

@@ -298,8 +298,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     const state = ensureCollaborationState({
       chatId: "oc_chat",
       messageId: "msg_1",
-      mode: "coordinate",
-      participants: ["main", "flink-sre", "starrocks-sre"],
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre"],
       maxHops: 3,
     });
     createFeishuReplyDispatcher({
@@ -386,8 +386,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     const state = ensureCollaborationState({
       chatId: "oc_chat",
       messageId: "msg_bare_json",
-      mode: "coordinate",
-      participants: ["main", "coder", "starrocks-sre"],
+      mode: "peer_collab",
+      participants: ["coder", "starrocks-sre"],
       maxHops: 3,
     });
     createFeishuReplyDispatcher({

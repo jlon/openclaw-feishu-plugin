@@ -499,7 +499,7 @@ describe("group collaboration matrix", () => {
         collaboration: {
           taskId: "task_x",
           mode: "peer_collab",
-          protocol: "scripted_peer",
+          protocol: "runtime",
           phase: "initial_assessment",
           participants: ["flink-sre", "starrocks-sre"],
           isCurrentOwner: false,
@@ -515,8 +515,8 @@ describe("group collaboration matrix", () => {
     expect(body).toContain("do not expose tool calls or internal routing");
     expect(body).toContain("do not call sessions_send, sessions_spawn, subagents, or message");
     expect(body).toContain("Collaboration task task_x");
-    expect(body).toContain("This is a scripted peer collaboration round.");
-    expect(body).not.toContain('"action":"collab_assess"');
+    expect(body).toContain("This is the initial assessment stage.");
+    expect(body).toContain('"action":"collab_assess"');
   });
 
   it("14. awaiting-accept body tells target how to respond to handoff", () => {

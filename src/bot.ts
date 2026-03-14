@@ -20,10 +20,8 @@ import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { downloadMessageResourceFeishu } from "./media.js";
 import {
-  classifyGroupCoAddressMode,
   extractMentionTargets,
-  extractEventText,
-  resolveExplicitGroupCoAddressParticipants,
+  resolveGroupCoAddressIntent,
   stripExplicitGroupCoAddressMode,
   isMentionForwardRequest,
   type MentionTarget,
@@ -45,7 +43,6 @@ import {
   claimScriptedPeerTurnDispatch,
   claimPendingCoordinateParticipants,
   getCollaborationState,
-  markScriptedPeerAssessmentComplete,
   resolveCollaborationStateForMessage,
   type CollaborationRuntimeContext,
 } from "./collaboration.js";
@@ -1054,8 +1051,6 @@ export function buildFeishuAgentBody(params: {
 
   if (ctx.collaboration) {
     const collaboration = ctx.collaboration;
-    const isScriptedPeer =
-      collaboration.mode === "peer_collab" && collaboration.protocol === "scripted_peer";
     const recentVisibleTurns = collaboration.recentVisibleTurns ?? [];
     const ownPreviousVisibleTurn = agentId
       ? [...recentVisibleTurns].reverse().find((turn) => turn.agentId === agentId)?.text
@@ -1084,44 +1079,20 @@ export function buildFeishuAgentBody(params: {
         `\n[System: Stay consistent with YourPreviousVisibleTurn unless you explicitly refine or revise it.]`;
     }
     if (collaboration.phase === "initial_assessment" && collaboration.mode === "peer_collab" && agentId) {
-      if (isScriptedPeer) {
-        messageBody +=
-          `\n[System: This is a scripted peer collaboration round.]` +
-          `\n[System: Visible reply should be exactly one short sentence with your first judgment from your own role.]` +
-          `\n[System: Do not ask the user follow-up questions, do not cue another participant, and do not expose any control protocol.]` +
-          `\n[System: After that one sentence, stop.]`;
-      } else {
-        messageBody +=
-          `\n[System: This is the initial assessment stage.]` +
-          `\n[System: Visible reply should be exactly one short sentence about what you will inspect from your own side.]` +
-          `\n[System: Do not ask the user follow-up questions during initial assessment.]` +
-          `\n[System: Do not call sessions_send, sessions_spawn, subagents, or message during initial assessment.]` +
-          `\n[System: After the visible reply, append exactly one hidden control block in this format:` +
-          `\n\`\`\`openclaw-collab` +
-          `\n{"action":"collab_assess","taskId":"${collaboration.taskId}","agentId":"${agentId}","ownershipClaim":"owner_candidate","currentFinding":"...","nextCheck":"...","needsWorker":false}` +
-          `\n\`\`\`` +
-          `\n[System: The hidden control block will be stripped before sending to Feishu.]`;
-      }
+      messageBody +=
+        `\n[System: This is the initial assessment stage.]` +
+        `\n[System: Visible reply should be exactly one short sentence about what you will inspect from your own side.]` +
+        `\n[System: Do not ask the user follow-up questions during initial assessment.]` +
+        `\n[System: Do not call sessions_send, sessions_spawn, subagents, or message during initial assessment.]` +
+        `\n[System: After the visible reply, append exactly one hidden control block in this format:` +
+        `\n\`\`\`openclaw-collab` +
+        `\n{"action":"collab_assess","taskId":"${collaboration.taskId}","agentId":"${agentId}","ownershipClaim":"owner_candidate","currentFinding":"...","nextCheck":"...","needsWorker":false}` +
+        `\n\`\`\`` +
+        `\n[System: The hidden control block will be stripped before sending to Feishu.]`;
     } else if (collaboration.phase === "active_collab") {
       if (collaboration.isCurrentOwner) {
         const canHandoff = collaboration.allowedActions.includes("agent_handoff");
-        if (isScriptedPeer) {
-          if (collaboration.isFinalScriptedTurn) {
-            messageBody +=
-              `\n[System: This is the final scripted peer turn.]` +
-              `\n[System: Visible reply should synthesize both sides into one concise concluding sentence.]` +
-              `\n[System: Do not mention baton-taking, do not cue another participant, and do not expose any control protocol.]` +
-              `\n[System: After the conclusion sentence, stop.]`;
-          } else {
-            messageBody +=
-              `\n[System: You are the current scripted speaker.]` +
-              `\n[System: Read RecentVisibleTurns first and continue from the latest visible point made by another participant instead of restarting the discussion.]` +
-              `\n[System: Build on your role's earlier line if YourPreviousVisibleTurn exists; do not act as if you have amnesia.]` +
-              `\n[System: Visible reply should add exactly one deeper point from your own role in one or two short sentences.]` +
-              `\n[System: If you naturally reference the next participant's domain, keep it implicit and brief. Do not say '收到接力棒', '轮到你', '轮到我', '我来接手', or similar baton language.]` +
-              `\n[System: Do not append any hidden control block. After your contribution, stop.]`;
-          }
-        } else if (collaboration.mode === "coordinate" && agentId === "main") {
+        if (collaboration.mode === "coordinate" && agentId === "main") {
           messageBody +=
             `\n[System: You are coordinating this task. Your visible reply should acknowledge the request, assign the relevant participants in parallel, and set the expected output.]` +
             `\n[System: In this first coordinator turn, do not append an agent_handoff control block. The mentioned specialists will be dispatched automatically.]` +
@@ -1155,9 +1126,6 @@ export function buildFeishuAgentBody(params: {
             `\n[System: Current owner is ${collaboration.currentOwner}. You are participating as a specialist in a coordinated task.]` +
             `\n[System: Visible reply should be exactly one short sentence from your own role: your first check, finding, or next step.]` +
             `\n[System: Do not @ other participants, do not summarize for the coordinator, do not append completion chatter, do not notify main yourself, and do not emit hidden control blocks unless AllowedActions explicitly says so.]`;
-        } else if (isScriptedPeer) {
-          messageBody +=
-            `\n[System: Current scripted speaker is ${collaboration.currentOwner}. Wait for your turn unless the user re-addresses you explicitly.]`;
         } else {
           messageBody +=
             `\n[System: Current owner is ${collaboration.currentOwner}. Do not act as the main speaker unless the user re-addresses you.]`;
@@ -1267,32 +1235,16 @@ export async function handleFeishuMessage(params: {
       botOpenIdMap: botOpenIds,
       botNameMap: botNames,
     });
-    const explicitGroupParticipants = resolveExplicitGroupCoAddressParticipants({
-      text: extractEventText(event),
+    const groupIntent = resolveGroupCoAddressIntent({
+      event,
+      mentionedBotAccountIds: detectedMentionedBotAccountIds,
       knownAccountIds: [...botOpenIds.keys()],
       botNameMap: botNames,
+      mainAccountId: "main",
     });
-    mentionedBotAccountIds =
-      explicitGroupParticipants.length > 0
-        ? explicitGroupParticipants
-        : detectedMentionedBotAccountIds;
-    const mainMentioned =
-      explicitGroupParticipants.length > 0
-        ? explicitGroupParticipants.includes("main") || ctx.explicitGroupCoAddressMode === "coordinate"
-        : mentionedBotAccountIds.includes("main");
-    let groupCoAddressMode = classifyGroupCoAddressMode({
-      event,
-      mentionedBotCount: mentionedBotAccountIds.length,
-      mainMentioned,
-    });
-    let effectiveGroupParticipants =
-      groupCoAddressMode === "peer_collab"
-        ? mentionedBotAccountIds.filter((participant) => normalizeAgentId(participant) !== "main")
-        : mentionedBotAccountIds;
-    if (groupCoAddressMode === "peer_collab" && effectiveGroupParticipants.length < 2) {
-      groupCoAddressMode = "direct_reply";
-      effectiveGroupParticipants = mentionedBotAccountIds;
-    }
+    mentionedBotAccountIds = groupIntent.rawParticipants;
+    const groupCoAddressMode = groupIntent.mode;
+    const effectiveGroupParticipants = groupIntent.participants;
     if (groupCoAddressMode !== "none") {
       ctx = {
         ...ctx,
@@ -1907,11 +1859,10 @@ export async function handleFeishuMessage(params: {
           return undefined;
         }
         if (
-          state.protocol === "scripted_peer" &&
+          state.mode === "peer_collab" &&
           state.phase === "active_collab" &&
           typeof state.scriptedTurnIndex === "number" &&
-          typeof state.scriptedTotalTurns === "number" &&
-          state.scriptedTurnIndex + 1 < state.scriptedTotalTurns
+          state.handoffCount < state.maxHops
         ) {
           const currentIndex = state.participants.findIndex(
             (participant) => normalizeAgentId(participant) === normalizedSpeaker,
@@ -2004,11 +1955,6 @@ export async function handleFeishuMessage(params: {
                 }),
             }),
         });
-        if (targetState.protocol === "scripted_peer") {
-          collaborationState =
-            markScriptedPeerAssessmentComplete(targetState.taskId, normalizeAgentId(targetAgentId)) ??
-            collaborationState;
-        }
       };
       const results = await Promise.allSettled(claim.targets.map(dispatchTarget));
       for (let i = 0; i < results.length; i += 1) {
@@ -2114,7 +2060,7 @@ export async function handleFeishuMessage(params: {
         return;
       }
       const latestState = getCollaborationState(collaborationState.taskId);
-      if (!latestState || latestState.protocol === "scripted_peer") {
+      if (!latestState) {
         return;
       }
       const activeHandoff = latestState?.activeHandoffState;
@@ -2229,9 +2175,7 @@ export async function handleFeishuMessage(params: {
         return;
       }
       const claimedState =
-        latestState.protocol === "scripted_peer"
-          ? claimScriptedPeerTurnDispatch(latestState.taskId)
-          : latestState;
+        claimScriptedPeerTurnDispatch(latestState.taskId) ?? undefined;
       if (!claimedState) {
         return;
       }
@@ -2302,31 +2246,28 @@ export async function handleFeishuMessage(params: {
                 cfg,
                 dispatcher,
                 replyOptions,
-              }),
-          }),
+                }),
+            }),
       });
-      if (claimedState.protocol === "scripted_peer") {
-        const stateAfterDispatch = getCollaborationState(claimedState.taskId);
-        const latestActiveHandoffId = stateAfterDispatch?.activeHandoffState?.handoffId;
-        const stateUnchanged =
-          stateAfterDispatch &&
-          stateAfterDispatch.protocol === "scripted_peer" &&
-          stateAfterDispatch.phase === claimedState.phase &&
-          stateAfterDispatch.currentOwner === claimedState.currentOwner &&
-          stateAfterDispatch.speakerToken === claimedState.speakerToken &&
-          latestActiveHandoffId === previousHandoffId;
-        if (stateUnchanged) {
-          const advancedState = advanceScriptedPeerTurn(claimedState.taskId, ownerAgentId);
-          if (!advancedState || advancedState.phase === "completed") {
-            return;
-          }
-          await maybeDispatchCurrentOwnerFollowup({
-            previousPhase: claimedState.phase,
-            previousOwner: claimedState.currentOwner,
-            previousSpeakerToken: claimedState.speakerToken,
-          });
+      const stateAfterDispatch = getCollaborationState(claimedState.taskId);
+      const latestActiveHandoffId = stateAfterDispatch?.activeHandoffState?.handoffId;
+      const stateUnchanged =
+        stateAfterDispatch &&
+        stateAfterDispatch.phase === claimedState.phase &&
+        stateAfterDispatch.currentOwner === claimedState.currentOwner &&
+        stateAfterDispatch.speakerToken === claimedState.speakerToken &&
+        latestActiveHandoffId === previousHandoffId;
+      if (stateUnchanged) {
+        const advancedState = advanceScriptedPeerTurn(claimedState.taskId, ownerAgentId);
+        if (!advancedState || advancedState.phase === "completed") {
           return;
         }
+        await maybeDispatchCurrentOwnerFollowup({
+          previousPhase: claimedState.phase,
+          previousOwner: claimedState.currentOwner,
+          previousSpeakerToken: claimedState.speakerToken,
+        });
+        return;
       }
       await waitForCollaborationStateChange({
         taskId: claimedState.taskId,
@@ -2679,17 +2620,6 @@ export async function handleFeishuMessage(params: {
       log(
         `feishu[${account.accountId}]: dispatch complete (queuedFinal=${queuedFinal}, replies=${counts.final})`,
       );
-      if (
-        isGroup &&
-        collaborationState?.protocol === "scripted_peer" &&
-        collaborationState.phase === "initial_assessment"
-      ) {
-        collaborationState =
-          markScriptedPeerAssessmentComplete(
-            collaborationState.taskId,
-            normalizedRouteAgentId,
-          ) ?? collaborationState;
-      }
       await maybeDispatchPeerAssessmentParticipants({
         dispatchedAgentId:
           collaborationState?.phase === "initial_assessment" ? normalizedRouteAgentId : undefined,

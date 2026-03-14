@@ -11,6 +11,7 @@ import {
   markScriptedPeerAssessmentComplete,
   parseCollaborationControlBlocks,
   recordCollaborationVisibleTurn,
+  resolveCollaborationStateForMessage,
   sweepCollaborationStatesForTesting,
 } from "./collaboration.js";
 
@@ -44,7 +45,7 @@ describe("collaboration state", () => {
     expect(state.speakerToken).toBe("main");
   });
 
-  it("creates an explicit peer_collab task in scripted mode", () => {
+  it("keeps explicit peer_collab override on the unified runtime protocol", () => {
     const state = ensureCollaborationState({
       chatId: "oc_group_scripted",
       messageId: "msg_scripted",
@@ -52,9 +53,115 @@ describe("collaboration state", () => {
       participants: ["flink-sre", "starrocks-sre"],
       explicitMode: "peer_collab",
     });
-    expect(state.protocol).toBe("scripted_peer");
+    expect(state.protocol).toBe("runtime");
     expect(state.phase).toBe("initial_assessment");
     expect(state.currentOwner).toBeUndefined();
+  });
+
+  it("creates a fresh task for a new user message in the same thread", () => {
+    const first = resolveCollaborationStateForMessage({
+      event: {
+        message: {
+          chat_id: "oc_group_thread",
+          root_id: "om_root_same",
+          thread_id: "om_thread_same",
+          message_id: "om_user_msg_1",
+        },
+      } as any,
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre"],
+      maxHops: 3,
+    });
+    const second = resolveCollaborationStateForMessage({
+      event: {
+        message: {
+          chat_id: "oc_group_thread",
+          root_id: "om_root_same",
+          thread_id: "om_thread_same",
+          message_id: "om_user_msg_2",
+        },
+      } as any,
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre"],
+      maxHops: 3,
+    });
+    expect(second.taskId).not.toBe(first.taskId);
+  });
+
+  it("elects peer owner from real collab_assess claims instead of participant order", () => {
+    const state = ensureCollaborationState({
+      chatId: "oc_group_owner_claims",
+      messageId: "msg_owner_claims",
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre"],
+      maxHops: 3,
+    });
+    applyCollaborationActions([
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "flink-sre",
+        ownershipClaim: "supporting",
+        currentFinding: "先补一层实时任务视角",
+        nextCheck: "等待存储侧判断",
+      },
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "starrocks-sre",
+        ownershipClaim: "owner_candidate",
+        currentFinding: "更适合继续主讲",
+        nextCheck: "补一层存储与查询侧判断",
+      },
+    ]);
+    const finalState = getCollaborationStateForTesting(state.taskId);
+    expect(finalState?.phase).toBe("active_collab");
+    expect(finalState?.currentOwner).toBe("starrocks-sre");
+    expect(finalState?.speakerToken).toBe("starrocks-sre");
+  });
+
+  it("allows peer collaboration to create a real handoff instead of ignoring it", () => {
+    const state = ensureCollaborationState({
+      chatId: "oc_group_peer_handoff",
+      messageId: "msg_peer_handoff",
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre"],
+      maxHops: 3,
+    });
+    applyCollaborationActions([
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "flink-sre",
+        ownershipClaim: "owner_candidate",
+      },
+      {
+        action: "collab_assess",
+        taskId: state.taskId,
+        agentId: "starrocks-sre",
+        ownershipClaim: "supporting",
+      },
+    ]);
+    applyCollaborationActions([
+      {
+        action: "agent_handoff",
+        taskId: state.taskId,
+        handoffId: "handoff_peer_real",
+        fromAgentId: "flink-sre",
+        targetAgentId: "starrocks-sre",
+        timeWindow: "18:20-18:35",
+        currentFinding: "从 Flink 侧先判断到这里",
+        unresolvedQuestion: "请 StarRocks 侧补一层",
+        evidencePaths: [],
+      },
+    ]);
+    const finalState = getCollaborationStateForTesting(state.taskId);
+    expect(finalState?.phase).toBe("awaiting_accept");
+    expect(finalState?.activeHandoffState).toMatchObject({
+      handoffId: "handoff_peer_real",
+      fromAgentId: "flink-sre",
+      targetAgentId: "starrocks-sre",
+    });
   });
 
   it("strips control blocks from visible text and parses collab_assess actions", () => {
@@ -121,7 +228,7 @@ describe("collaboration state", () => {
     expect(parsed.actions).toEqual([]);
   });
 
-  it("elects owner after all scripted peer assessments arrive", () => {
+  it("elects owner after all default peer assessments arrive", () => {
     const state = ensureCollaborationState({
       chatId: "oc_group_1",
       messageId: "msg_3",
@@ -136,7 +243,7 @@ describe("collaboration state", () => {
     expect(finalState?.speakerToken).toBe("flink-sre");
   });
 
-  it("scripted peer collaboration elects the first participant after all initial assessments", () => {
+  it("runtime peer collaboration elects owner after all initial assessments", () => {
     const state = ensureCollaborationState({
       chatId: "oc_group_scripted_assess",
       messageId: "msg_scripted_assess",
@@ -149,23 +256,23 @@ describe("collaboration state", () => {
     const advanced = markScriptedPeerAssessmentComplete(state.taskId, "starrocks-sre");
     expect(advanced).toEqual(
       expect.objectContaining({
-        protocol: "scripted_peer",
+        protocol: "runtime",
         phase: "active_collab",
         currentOwner: "flink-sre",
         speakerToken: "flink-sre",
         scriptedTurnIndex: 0,
-        scriptedTotalTurns: 6,
+        scriptedTotalTurns: undefined,
       }),
     );
   });
 
-  it("scripted peer collaboration advances speakers round-robin and completes after scripted turns", () => {
+  it("runtime peer collaboration auto-advances owners until maxHops is reached", () => {
     const state = ensureCollaborationState({
       chatId: "oc_group_scripted_turns",
       messageId: "msg_scripted_turns",
       mode: "peer_collab",
       participants: ["flink-sre", "starrocks-sre"],
-      maxHops: 1,
+      maxHops: 2,
       explicitMode: "peer_collab",
     });
     markScriptedPeerAssessmentComplete(state.taskId, "flink-sre");
@@ -193,26 +300,16 @@ describe("collaboration state", () => {
     const afterThirdTurn = advanceScriptedPeerTurn(state.taskId, "flink-sre");
     expect(afterThirdTurn).toEqual(
       expect.objectContaining({
-        phase: "active_collab",
-        currentOwner: "starrocks-sre",
-        speakerToken: "starrocks-sre",
+        phase: "completed",
+        currentOwner: "flink-sre",
+        speakerToken: undefined,
         scriptedTurnIndex: 3,
         lastSpeakerId: "flink-sre",
       }),
     );
-    const afterFourthTurn = advanceScriptedPeerTurn(state.taskId, "starrocks-sre");
-    expect(afterFourthTurn).toEqual(
-      expect.objectContaining({
-        phase: "completed",
-        currentOwner: "starrocks-sre",
-        speakerToken: undefined,
-        scriptedTurnIndex: 4,
-        lastSpeakerId: "starrocks-sre",
-      }),
-    );
   });
 
-  it("ignores handoff control actions for scripted peer collaboration", () => {
+  it("applies handoff control actions for runtime peer collaboration", () => {
     const state = ensureCollaborationState({
       chatId: "oc_group_scripted_ignore_handoff",
       messageId: "msg_scripted_ignore_handoff",
@@ -240,10 +337,14 @@ describe("collaboration state", () => {
     ]);
 
     const after = getCollaborationStateForTesting(state.taskId);
-    expect(after).toEqual(before);
-    expect(after?.activeHandoffState).toBeUndefined();
-    expect(after?.phase).toBe("active_collab");
-    expect(after?.currentOwner).toBe("flink-sre");
+    expect(after).not.toEqual(before);
+    expect(after?.activeHandoffState).toMatchObject({
+      handoffId: "handoff_should_be_ignored",
+      fromAgentId: "flink-sre",
+      targetAgentId: "starrocks-sre",
+    });
+    expect(after?.phase).toBe("awaiting_accept");
+    expect(after?.speakerToken).toBe("starrocks-sre");
   });
 
   it("claims each scripted peer turn only once", () => {
@@ -340,7 +441,7 @@ describe("collaboration state", () => {
     expect(ctx).toEqual({
       taskId: state.taskId,
       mode: "coordinate",
-      protocol: "legacy_handoff",
+      protocol: "runtime",
       phase: "active_collab",
       participants: ["main", "flink-sre"],
       currentOwner: "main",

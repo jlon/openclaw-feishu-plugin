@@ -257,7 +257,7 @@ flowchart LR
 - 新增了 `feishu_chat(action="participants")` 视图，用来回答“这个群里有哪些可见成员和内部机器人参与者”
 - 群协作协议新增了 `direct_reply / peer_collab / coordinate` 行为分流，但这不是新的配置字段，而是运行时行为增强
 - 新增了 `channels.feishu.collaboration.maxHops`，用来限制 `peer_collab / coordinate` 下的结构化接棒深度
-- 新增了显式模式标签 `#直答 / #协作 / #编排`，用于稳定驱动群协作协议；未使用标签时仍保留自然语言兼容层
+- 保留了显式模式标签 `#直答 / #协作 / #编排`，只作为 override/debug；日常主路径仍然是自然群聊
 
 ### 持续下钻与 `maxHops`
 
@@ -324,27 +324,30 @@ flowchart LR
 - 共同点名多个 Agent，但问题只是轻量直答
 - 每个被点名 Agent 只代表自己回答
 - 不创建任务，不发生 handoff
-- 推荐触发方式：`@main #直答(A,B) ...`
+- 主路径触发方式：`@A @B 你俩各说一句 ...`
+- override：`#直答`
 
 ### 3. `peer_collab`
-- 由 `main` 作为原始入口，显式声明参与者和 `#协作`
+- 多个内部专业 Agent 被共同点名，且不属于轻量直答或 `main` 汇总
 - 会创建协作任务
 - 允许 owner、handoff、accept/reject/need_info/complete
 - 用于“多个专业 Agent 受控多轮协作”
-- 推荐触发方式：`@main #协作(A,B) ...`
+- 主路径触发方式：`@A @B 你俩一起看下这条链路，先各自说判断，再互相补充`
+- override：`#协作`
 
 ### 4. `coordinate`
 - 明确要求 `main` 安排、协调、汇总、拉通
 - 只有 `main` 处理原始群消息
 - 其他 Agent 通过内部协作参与
-- 推荐触发方式：`@main #编排(A,B) ...`
+- 主路径触发方式：`@首席大管家 @A @B 帮我安排并汇总`
+- override：`#编排`
 
 ### 5. 自然语言兼容层
 - `@main + 安排/协调/汇总` 倾向 `coordinate`
 - 明显轻量直答句式倾向 `direct_reply`
-- 其余多 bot 共同点名默认仍是 `direct_reply`
+- 其余多内部 bot 共同点名默认进入 `peer_collab`
 
-这条路径保留是为了兼容历史用法，不承诺和显式模式一样稳定。稳定进入持续协作，必须使用显式 `#协作(A,B)`。
+这条路径是当前推荐主路径。显式标签只在需要强制覆盖分类时使用，不是日常必需。
 
 更细的协议细节见：
 - [能力与兼容性](docs/01-能力与兼容性.md)
