@@ -3,11 +3,14 @@ import {
   applyCollaborationActions,
   advancePeerAutoTurn,
   buildCollaborationRuntimeContext,
+  claimCoordinateSummaryDispatch,
   claimCurrentOwnerDispatch,
   clearCollaborationStateForTesting,
+  completeCoordinateSummary,
   ensureCollaborationState,
   getCollaborationStateForTesting,
   getCollaborationStateStatsForTesting,
+  markCoordinateParticipantCompleted,
   parseCollaborationControlBlocks,
   recordCollaborationVisibleTurn,
   resolveNextPeerAutoSpeaker,
@@ -72,10 +75,73 @@ describe("collaboration state", () => {
       participants: ["flink-sre", "starrocks-sre"],
       maxHops: 3,
     });
+    applyCollaborationActions([
+      {
+        action: "collab_assess",
+        taskId: first.taskId,
+        agentId: "flink-sre",
+        ownershipClaim: "owner_candidate",
+      },
+      {
+        action: "collab_assess",
+        taskId: first.taskId,
+        agentId: "starrocks-sre",
+        ownershipClaim: "supporting",
+      },
+    ]);
     const second = resolveCollaborationStateForMessage({
       event: {
         message: {
           chat_id: "oc_group_thread",
+          root_id: "om_root_same",
+          thread_id: "om_thread_same",
+          message_id: "om_user_msg_2",
+        },
+      } as any,
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre"],
+      maxHops: 3,
+    });
+    expect(second.taskId).toBe(first.taskId);
+  });
+
+  it("creates a fresh task for a follow-up in the same thread after the previous task is completed", () => {
+    const first = resolveCollaborationStateForMessage({
+      event: {
+        message: {
+          chat_id: "oc_group_thread_completed",
+          root_id: "om_root_same",
+          thread_id: "om_thread_same",
+          message_id: "om_user_msg_1",
+        },
+      } as any,
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre"],
+      maxHops: 3,
+    });
+    applyCollaborationActions([
+      {
+        action: "collab_assess",
+        taskId: first.taskId,
+        agentId: "flink-sre",
+        ownershipClaim: "owner_candidate",
+      },
+      {
+        action: "collab_assess",
+        taskId: first.taskId,
+        agentId: "starrocks-sre",
+        ownershipClaim: "supporting",
+      },
+      {
+        action: "agent_handoff_complete",
+        taskId: first.taskId,
+        agentId: "flink-sre",
+      },
+    ]);
+    const second = resolveCollaborationStateForMessage({
+      event: {
+        message: {
+          chat_id: "oc_group_thread_completed",
           root_id: "om_root_same",
           thread_id: "om_thread_same",
           message_id: "om_user_msg_2",
@@ -301,23 +367,12 @@ describe("collaboration state", () => {
     const afterSecondTurn = advancePeerAutoTurn(state.taskId, "starrocks-sre");
     expect(afterSecondTurn).toEqual(
       expect.objectContaining({
-        phase: "active_collab",
-        currentOwner: "flink-sre",
-        speakerToken: "flink-sre",
+        phase: "completed",
+        currentOwner: "starrocks-sre",
+        speakerToken: undefined,
         autoTurnCount: 2,
         handoffCount: 0,
         lastSpeakerId: "starrocks-sre",
-      }),
-    );
-    const afterThirdTurn = advancePeerAutoTurn(state.taskId, "flink-sre");
-    expect(afterThirdTurn).toEqual(
-      expect.objectContaining({
-        phase: "active_collab",
-        currentOwner: "starrocks-sre",
-        speakerToken: "starrocks-sre",
-        autoTurnCount: 3,
-        handoffCount: 0,
-        lastSpeakerId: "flink-sre",
       }),
     );
   });
@@ -501,6 +556,8 @@ describe("collaboration state", () => {
       isCurrentOwner: true,
       activeHandoff: undefined,
       recentVisibleTurns: [],
+      coordinateCompletedAgents: [],
+      coordinateSummaryPending: false,
       allowedActions: ["agent_handoff", "agent_handoff_complete"],
     });
   });
@@ -547,6 +604,31 @@ describe("collaboration state", () => {
     });
     expect(resolveNextPeerAutoSpeaker(state, "flink-sre")).toBe("starrocks-sre");
     expect(resolveNextPeerAutoSpeaker(state, "starrocks-sre")).toBe("coder");
+  });
+
+  it("tracks coordinate participant completions and becomes summary-ready once all specialists replied", () => {
+    const state = ensureCollaborationState({
+      chatId: "oc_group_coordinate_summary",
+      messageId: "msg_coordinate_summary",
+      mode: "coordinate",
+      participants: ["main", "flink-sre", "starrocks-sre"],
+      maxHops: 3,
+    });
+    expect(markCoordinateParticipantCompleted(state.taskId, "flink-sre")?.coordinateCompletedAgents).toEqual([
+      "flink-sre",
+    ]);
+    expect(claimCoordinateSummaryDispatch(state.taskId)).toBeUndefined();
+    expect(markCoordinateParticipantCompleted(state.taskId, "starrocks-sre")?.coordinateCompletedAgents).toEqual([
+      "flink-sre",
+      "starrocks-sre",
+    ]);
+    const summaryState = claimCoordinateSummaryDispatch(state.taskId);
+    expect(summaryState?.coordinateSummaryPending).toBe(true);
+    expect(summaryState?.coordinateSummaryDispatchKey).toBe(`coordinate-summary:${state.taskId}`);
+    expect(claimCoordinateSummaryDispatch(state.taskId)).toBeUndefined();
+    const completedState = completeCoordinateSummary(state.taskId);
+    expect(completedState?.phase).toBe("completed");
+    expect(completedState?.coordinateSummaryPending).toBe(false);
   });
 
   it("increments handoff count after a successful accept", () => {

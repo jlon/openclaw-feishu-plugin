@@ -22,6 +22,7 @@ export type GroupCoAddressIntent = {
   participants: string[];
   rawParticipants: string[];
   mainMentioned: boolean;
+  rawEntryAccountId?: string;
 };
 
 const EXPLICIT_GROUP_MODE_PATTERN = /(?:^|\s)#(直答|协作|编排)(?=\s|$)/u;
@@ -41,6 +42,9 @@ const GROUP_COORDINATION_PATTERNS = [
   /总结/u,
   /统筹/u,
   /让.+(安排|协调|汇总|总结|统筹|跟进)/u,
+  /最后.{0,8}(给我|给出|产出).{0,8}(结论|总结|汇总|答复)/u,
+  /最后.{0,8}(总结|汇总).{0,8}(给我|出来|一下)/u,
+  /统一(回复|口径|结论|总结)/u,
 ];
 
 const GROUP_DIRECT_REPLY_PATTERNS = [
@@ -219,7 +223,7 @@ export function classifyGroupCoAddressMode(params: {
   if (mentionedBotCount < 2) {
     return "none";
   }
-  if (mainMentioned && isGroupCoordinationRequest(event)) {
+  if (isGroupCoordinationRequest(event)) {
     return "coordinate";
   }
   if (isGroupDirectReplyRequest(event) && !isGroupContinuationRequest(event)) {
@@ -251,13 +255,12 @@ export function resolveGroupCoAddressIntent(params: {
     explicitParticipants.length > 0 ? explicitParticipants : [...mentionedBotAccountIds],
   );
   const explicitMode = extractExplicitGroupCoAddressMode(extractEventText(event));
-  const mainMentioned =
-    rawParticipants.includes(mainAccountId) || explicitMode === "coordinate";
   let mode = classifyGroupCoAddressMode({
     event,
     mentionedBotCount: rawParticipants.length,
-    mainMentioned,
+    mainMentioned: rawParticipants.includes(mainAccountId) || explicitMode === "coordinate",
   });
+  const mainMentioned = rawParticipants.includes(mainAccountId) || mode === "coordinate";
   let participants =
     mode === "peer_collab"
       ? rawParticipants.filter((participant) => participant !== mainAccountId)
@@ -271,6 +274,7 @@ export function resolveGroupCoAddressIntent(params: {
     participants,
     rawParticipants,
     mainMentioned,
+    rawEntryAccountId: mode === "none" ? undefined : mainAccountId,
   };
 }
 

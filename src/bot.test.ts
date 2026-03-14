@@ -390,6 +390,41 @@ describe("buildFeishuAgentBody", () => {
     expect(body).toContain("Do not @ other participants");
     expect(body).toContain("do not emit hidden control blocks unless AllowedActions explicitly says so");
   });
+
+  it("tells the coordinator to summarize once all specialists have replied", () => {
+    const body = buildFeishuAgentBody({
+      ctx: {
+        content: "user: @首席大管家 @Flink-SRE @Starrocks-SRE 帮我安排并汇总这次排查",
+        senderName: "user",
+        senderOpenId: "ou_sender",
+        messageId: "msg-coordinate-summary",
+        hasAnyMention: true,
+        groupCoAddressMode: "coordinate",
+        collaboration: {
+          taskId: "task_coordinate_summary",
+          mode: "coordinate",
+          phase: "active_collab",
+          participants: ["main", "flink-sre", "starrocks-sre"],
+          currentOwner: "main",
+          speakerToken: "main",
+          handoffCount: 0,
+          autoTurnCount: 0,
+          maxHops: 3,
+          isCurrentOwner: true,
+          coordinateCompletedAgents: ["flink-sre", "starrocks-sre"],
+          coordinateSummaryPending: true,
+          allowedActions: [],
+        },
+      },
+      botOpenId: "ou_main",
+      autoMentionTargets: false,
+      agentId: "main",
+    });
+
+    expect(body).toContain("All specialists have replied. Your job now is to produce the coordinator summary.");
+    expect(body).toContain("Do not assign more participants");
+    expect(body).not.toContain("do not append an agent_handoff control block. The mentioned specialists will be dispatched automatically.");
+  });
 });
 
 describe("bot cache cleanup", () => {
@@ -1127,7 +1162,7 @@ describe("handleFeishuMessage command authorization", () => {
     const ownerCalls = mockDispatchReplyFromConfig.mock.calls
       .map((call) => call[0] as { ctx: Record<string, string> })
       .filter((call) => call.ctx.MessageSid?.includes("::owner::"));
-    expect(ownerCalls.length).toBe(3);
+    expect(ownerCalls.length).toBe(2);
     expect(ownerCalls[0]).toEqual(
       expect.objectContaining({
         ctx: expect.objectContaining({
@@ -1150,17 +1185,6 @@ describe("handleFeishuMessage command authorization", () => {
         }),
       }),
     );
-    expect(ownerCalls[2]).toEqual(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          AccountId: "flink-sre",
-          MessageSid: expect.stringContaining("::owner::"),
-          CollaborationPhase: "active_collab",
-          CollaborationCurrentOwner: "flink-sre",
-          CollaborationIsCurrentOwner: true,
-        }),
-      }),
-    );
     const firstAssessmentParams = mockCreateFeishuReplyDispatcher.mock.calls[0]?.[0] as
       | { visibleMentionTargets?: Array<{ openId: string; name: string }> }
       | undefined;
@@ -1171,9 +1195,6 @@ describe("handleFeishuMessage command authorization", () => {
       | { visibleMentionTargets?: Array<{ openId: string; name: string }> }
       | undefined;
     const secondOwnerParams = mockCreateFeishuReplyDispatcher.mock.calls[3]?.[0] as
-      | { visibleMentionTargets?: Array<{ openId: string; name: string }> }
-      | undefined;
-    const thirdOwnerParams = mockCreateFeishuReplyDispatcher.mock.calls[4]?.[0] as
       | { visibleMentionTargets?: Array<{ openId: string; name: string }> }
       | undefined;
     expect(firstAssessmentParams?.visibleMentionTargets).toEqual([
@@ -1188,17 +1209,14 @@ describe("handleFeishuMessage command authorization", () => {
     expect(secondOwnerParams?.visibleMentionTargets).toEqual([
       expect.objectContaining({ openId: "ou_flink", name: "Flink-SRE" }),
     ]);
-    expect(thirdOwnerParams?.visibleMentionTargets).toEqual([
-      expect.objectContaining({ openId: "ou_starrocks", name: "Starrocks-SRE" }),
-    ]);
     const taskId = (
-      mockDispatchReplyFromConfig.mock.calls[4]?.[0] as { ctx?: Record<string, string> } | undefined
+      mockDispatchReplyFromConfig.mock.calls[3]?.[0] as { ctx?: Record<string, string> } | undefined
     )?.ctx?.CollaborationTaskId;
     expect(taskId).toBeTruthy();
     expect(getCollaborationStateForTesting(taskId!)?.phase).toBe("completed");
   });
 
-  it("fans out coordinate specialist turns in parallel after the coordinator reply", async () => {
+  it("fans out coordinate specialist turns in parallel and then dispatches a coordinator summary", async () => {
     mockCreateFeishuReplyDispatcher.mockImplementation((params) => ({
       dispatcher: {
         markComplete: vi.fn(),
@@ -1298,10 +1316,10 @@ describe("handleFeishuMessage command authorization", () => {
       runtime: createRuntimeEnv(),
     });
 
-    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(3);
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(4);
 
     const specialistCalls = mockDispatchReplyFromConfig.mock.calls
-      .slice(1)
+      .slice(1, 3)
       .map(([params]) => params.ctx)
       .sort((a, b) => String(a.AccountId).localeCompare(String(b.AccountId)));
 
@@ -1323,6 +1341,24 @@ describe("handleFeishuMessage command authorization", () => {
         CollaborationIsCurrentOwner: false,
       }),
     ]);
+
+    expect(mockDispatchReplyFromConfig.mock.calls[3]?.[0]).toEqual(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          AccountId: "main",
+          MessageSid: expect.stringContaining("::coordinate-summary::"),
+          CollaborationMode: "coordinate",
+          CollaborationPhase: "active_collab",
+          CollaborationCurrentOwner: "main",
+          CollaborationCoordinateSummaryPending: "true",
+        }),
+      }),
+    );
+    const summaryTaskId = (mockDispatchReplyFromConfig.mock.calls[3]?.[0] as {
+      ctx?: Record<string, string>;
+    })?.ctx?.CollaborationTaskId;
+    expect(summaryTaskId).toBeTruthy();
+    expect(getCollaborationStateForTesting(summaryTaskId! as string)?.phase).toBe("completed");
   });
 
   it("overrides upstream routing so natural multi-bot direct replies still enter through hidden main", async () => {

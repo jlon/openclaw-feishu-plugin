@@ -286,7 +286,7 @@ export function shouldSkipDispatchForMentionPolicy(params: {
   ).length;
   const coAddressMode = groupIntent.mode;
   if (coAddressMode !== "none") {
-    return accountId !== PRIMARY_FEISHU_ACCOUNT_ID;
+    return accountId !== (groupIntent.rawEntryAccountId ?? PRIMARY_FEISHU_ACCOUNT_ID);
   }
   const currentMentioned = Boolean(
     (currentBotOpenId?.trim() && mentionedOpenIds.includes(currentBotOpenId.trim())) ||
@@ -446,17 +446,7 @@ function registerEventHandlers(
         entries: freshEntries,
         botOpenId: botOpenIds.get(accountId),
       });
-      if (!combinedText.trim()) {
-        await dispatchFeishuMessage({
-          ...dispatchEntry,
-          message: {
-            ...dispatchEntry.message,
-            mentions: mergedMentions ?? dispatchEntry.message.mentions,
-          },
-        }, (dispatchEntry as FeishuMessageEvent & { __groupIntent?: GroupCoAddressIntent }).__groupIntent);
-        return;
-      }
-      await dispatchFeishuMessage({
+      const mergedEvent = {
         ...dispatchEntry,
         message: {
           ...dispatchEntry.message,
@@ -464,7 +454,35 @@ function registerEventHandlers(
           content: JSON.stringify({ text: combinedText }),
           mentions: mergedMentions ?? dispatchEntry.message.mentions,
         },
-      }, (dispatchEntry as FeishuMessageEvent & { __groupIntent?: GroupCoAddressIntent }).__groupIntent);
+      };
+      const mergedGroupIntent =
+        mergedEvent.message.chat_type === "group"
+          ? resolveGroupCoAddressIntent({
+              event: mergedEvent as FeishuMessageEvent,
+              mentionedBotAccountIds: extractMentionedBotAccountIds({
+                event: mergedEvent as FeishuMessageEvent,
+                botOpenIdMap: botOpenIds,
+                botNameMap: botNames,
+              }),
+              knownAccountIds: [...botOpenIds.keys()],
+              botNameMap: botNames,
+              mainAccountId: PRIMARY_FEISHU_ACCOUNT_ID,
+            })
+          : undefined;
+      if (!combinedText.trim()) {
+        await dispatchFeishuMessage(
+          {
+            ...mergedEvent,
+            message: {
+              ...mergedEvent.message,
+              content: dispatchEntry.message.content,
+            },
+          } as FeishuMessageEvent,
+          mergedGroupIntent,
+        );
+        return;
+      }
+      await dispatchFeishuMessage(mergedEvent as FeishuMessageEvent, mergedGroupIntent);
     },
     onError: (err) => {
       error(`feishu[${accountId}]: inbound debounce flush failed: ${String(err)}`);

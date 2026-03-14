@@ -6,12 +6,22 @@ import {
   resolveInboundDebounceMs,
 } from "./test-support/channel-runtime.js";
 import { createPluginRuntimeMock } from "./test-support/plugin-runtime-mock.js";
-import { parseFeishuMessageEvent, type FeishuMessageEvent } from "./bot.js";
+import {
+  extractMentionedBotAccountIds,
+  parseFeishuMessageEvent,
+  type FeishuMessageEvent,
+} from "./bot.js";
 import * as dedup from "./dedup.js";
-import { monitorSingleAccount } from "./monitor.account.js";
+import {
+  clearFeishuBotOpenIdsForTesting,
+  monitorSingleAccount,
+  setFeishuBotOpenIdForTesting,
+} from "./monitor.account.js";
 import { resolveReactionSyntheticEvent, type FeishuReactionCreatedEvent } from "./monitor.js";
 import { setFeishuRuntime } from "./runtime.js";
 import type { ResolvedFeishuAccount } from "./types.js";
+import { botNames } from "./monitor.state.js";
+import { resolveGroupCoAddressIntent } from "./mention.js";
 
 const handleFeishuMessageMock = vi.hoisted(() => vi.fn(async (_params: { event?: unknown }) => {}));
 const createEventDispatcherMock = vi.hoisted(() => vi.fn());
@@ -406,6 +416,8 @@ describe("Feishu inbound debounce regressions", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    clearFeishuBotOpenIdsForTesting();
+    botNames.clear();
   });
 
   it("keeps bot mention when per-message mention keys collide across non-forward messages", async () => {
@@ -580,5 +592,64 @@ describe("Feishu inbound debounce regressions", () => {
     expect(combined.text).toBe("fresh");
     expect(recordSpy).toHaveBeenCalledWith("default:om_old");
     expect(recordSpy).not.toHaveBeenCalledWith("default:om_new");
+  });
+
+  it("recomputes merged group intent from combined debounce text and mentions", async () => {
+    setDedupPassThroughMocks();
+    setFeishuBotOpenIdForTesting("main", "ou_main");
+    setFeishuBotOpenIdForTesting("flink-sre", "ou_flink");
+    setFeishuBotOpenIdForTesting("starrocks-sre", "ou_starrocks");
+    botNames.set("flink-sre", "Flink-SRE");
+    botNames.set("starrocks-sre", "Starrocks-SRE");
+    const onMessage = await setupDebounceMonitor({ botOpenId: "ou_main", botName: "首席大管家" });
+
+    await enqueueDebouncedMessage(
+      onMessage,
+      createTextEvent({
+        messageId: "om_coordinate_1",
+        text: "@Flink-SRE @Starrocks-SRE 你俩先看一下",
+        mentions: [
+          createMention({ openId: "ou_flink", name: "Flink-SRE", key: "@_user_1" }),
+          createMention({ openId: "ou_starrocks", name: "Starrocks-SRE", key: "@_user_2" }),
+        ],
+      }),
+    );
+    await enqueueDebouncedMessage(
+      onMessage,
+      createTextEvent({
+        messageId: "om_coordinate_2",
+        text: "最后给我一个结论",
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(handleFeishuMessageMock).toHaveBeenCalledTimes(1);
+    const dispatched = getFirstDispatchedEvent();
+    expect(dispatched.message.message_id).toBe("om_coordinate_2");
+    const mergedEvent = createTextEvent({
+      messageId: "om_coordinate_2",
+      text: "@Flink-SRE @Starrocks-SRE 你俩先看一下\n最后给我一个结论",
+      mentions: [
+        createMention({ openId: "ou_flink", name: "Flink-SRE", key: "@_user_1" }),
+        createMention({ openId: "ou_starrocks", name: "Starrocks-SRE", key: "@_user_2" }),
+      ],
+    });
+    const mergedIntent = resolveGroupCoAddressIntent({
+      event: mergedEvent,
+      mentionedBotAccountIds: extractMentionedBotAccountIds({
+        event: mergedEvent,
+        botOpenIdMap: new Map([
+          ["main", "ou_main"],
+          ["flink-sre", "ou_flink"],
+          ["starrocks-sre", "ou_starrocks"],
+        ]),
+        botNameMap: botNames,
+      }),
+      knownAccountIds: ["main", "flink-sre", "starrocks-sre"],
+      botNameMap: botNames,
+      mainAccountId: "main",
+    });
+    expect(mergedIntent.mode).toBe("coordinate");
+    expect(mergedIntent.rawEntryAccountId).toBe("main");
   });
 });

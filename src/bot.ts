@@ -40,10 +40,13 @@ import { getMessageFeishu, sendMessageFeishu } from "./send.js";
 import {
   advancePeerAutoTurn,
   buildCollaborationRuntimeContext,
+  claimCoordinateSummaryDispatch,
   claimPendingPeerAssessmentParticipants,
   claimCurrentOwnerDispatch,
   claimPendingCoordinateParticipants,
+  completeCoordinateSummary,
   getCollaborationState,
+  markCoordinateParticipantCompleted,
   resolveCollaborationStateForMessage,
   resolveNextPeerAutoSpeaker,
   type CollaborationRuntimeContext,
@@ -1096,10 +1099,17 @@ export function buildFeishuAgentBody(params: {
       if (collaboration.isCurrentOwner) {
         const canHandoff = collaboration.allowedActions.includes("agent_handoff");
         if (collaboration.mode === "coordinate" && agentId === "main") {
-          messageBody +=
-            `\n[System: You are coordinating this task. Your visible reply should acknowledge the request, assign the relevant participants in parallel, and set the expected output.]` +
-            `\n[System: In this first coordinator turn, do not append an agent_handoff control block. The mentioned specialists will be dispatched automatically.]` +
-            `\n[System: Do not speak on behalf of specialists. Keep the visible reply to one or two short sentences.]`;
+          if (collaboration.coordinateSummaryPending) {
+            messageBody +=
+              `\n[System: All specialists have replied. Your job now is to produce the coordinator summary.]` +
+              `\n[System: Synthesize the latest specialist findings into one concise conclusion and, if helpful, one next step.]` +
+              `\n[System: Do not assign more participants, do not append hidden control blocks, and keep the visible reply to one or two short sentences.]`;
+          } else {
+            messageBody +=
+              `\n[System: You are coordinating this task. Your visible reply should acknowledge the request, assign the relevant participants in parallel, and set the expected output.]` +
+              `\n[System: In this first coordinator turn, do not append an agent_handoff control block. The mentioned specialists will be dispatched automatically.]` +
+              `\n[System: Do not speak on behalf of specialists. Keep the visible reply to one or two short sentences.]`;
+          }
         } else {
           messageBody +=
             `\n[System: You are the current owner of this collaboration. Drive the next step and keep others in-role.]` +
@@ -1233,13 +1243,14 @@ export async function handleFeishuMessage(params: {
     | ReturnType<typeof resolveCollaborationStateForMessage>
     | undefined;
   let mentionedBotAccountIds: string[] = [];
+  let groupIntent: GroupCoAddressIntent | undefined;
   if (isGroup) {
     const detectedMentionedBotAccountIds = extractMentionedBotAccountIds({
       event,
       botOpenIdMap: botOpenIds,
       botNameMap: botNames,
     });
-    const groupIntent =
+    groupIntent =
       precomputedGroupIntent ??
       resolveGroupCoAddressIntent({
         event,
@@ -1247,7 +1258,7 @@ export async function handleFeishuMessage(params: {
         knownAccountIds: [...botOpenIds.keys()],
         botNameMap: botNames,
         mainAccountId: "main",
-      });
+    });
     mentionedBotAccountIds = groupIntent.rawParticipants;
     const groupCoAddressMode = groupIntent.mode;
     const effectiveGroupParticipants = groupIntent.participants;
@@ -1586,17 +1597,18 @@ export async function handleFeishuMessage(params: {
 
     if (
       isGroup &&
-      account.accountId === "main" &&
+      groupIntent?.rawEntryAccountId &&
+      account.accountId === groupIntent.rawEntryAccountId &&
       ctx.groupCoAddressMode &&
       ctx.groupCoAddressMode !== "none" &&
-      normalizeAgentId(route.agentId) !== "main"
+      normalizeAgentId(route.agentId) !== normalizeAgentId(groupIntent.rawEntryAccountId)
     ) {
       route = {
         ...route,
-        agentId: "main",
-        accountId: "main",
+        agentId: groupIntent.rawEntryAccountId,
+        accountId: groupIntent.rawEntryAccountId,
         sessionKey: core.channel.routing.buildAgentSessionKey({
-          agentId: "main",
+          agentId: groupIntent.rawEntryAccountId,
           channel: "feishu",
           peer: {
             kind: "group",
@@ -1794,6 +1806,11 @@ export async function handleFeishuMessage(params: {
                 .join("\n")
             : undefined,
         CollaborationOwnLastVisibleTurn: collaborationOwnLastVisibleTurn,
+        CollaborationCoordinateCompletedAgents:
+          collaboration?.coordinateCompletedAgents?.join(",") || undefined,
+        CollaborationCoordinateSummaryPending: collaboration?.coordinateSummaryPending
+          ? "true"
+          : undefined,
         ...mediaPayload,
       });
     };
@@ -1864,9 +1881,9 @@ export async function handleFeishuMessage(params: {
         if (otherParticipants.length === 0) {
           return undefined;
         }
-        if (state.phase === "active_collab" && state.currentOwner === speakerAgentId) {
-          const nextParticipant = resolveNextPeerAutoSpeaker(state, speakerAgentId);
-          if (nextParticipant) {
+      if (state.phase === "active_collab" && state.currentOwner === speakerAgentId) {
+        const nextParticipant = resolveNextPeerAutoSpeaker(state, speakerAgentId);
+        if (nextParticipant) {
             return buildVisibleMentionTargetsForAgents([nextParticipant]);
           }
         }
@@ -2354,6 +2371,7 @@ export async function handleFeishuMessage(params: {
                 }),
             }),
         });
+        markCoordinateParticipantCompleted(claim.state.taskId, targetAgentId);
       };
       const results = await Promise.allSettled(claim.targets.map(dispatchTarget));
       for (let i = 0; i < results.length; i++) {
@@ -2363,6 +2381,93 @@ export async function handleFeishuMessage(params: {
           );
         }
       }
+    };
+
+    const maybeDispatchCoordinateSummary = async () => {
+      if (!isGroup || !collaborationState) {
+        return;
+      }
+      const claim = claimCoordinateSummaryDispatch(collaborationState.taskId);
+      if (!claim) {
+        return;
+      }
+      const summaryVisibleMentionTargets = buildVisibleMentionTargetsForAgents(
+        claim.participants.filter((participant) => normalizeAgentId(participant) !== "main"),
+      );
+      const summarySessionKey = buildCollaborationSessionKey(
+        core.channel.routing.buildAgentSessionKey({
+          agentId: "main",
+          channel: "feishu",
+          peer: {
+            kind: isGroup ? "group" : "direct",
+            id: peerId,
+          },
+        }),
+        claim.taskId,
+      );
+      const summaryCtxPayload = buildCtxPayloadForAgent(
+        summarySessionKey,
+        "main",
+        true,
+        "main",
+        {
+          collaborationStateOverride: claim,
+          autoMentionTargetsOverride: false,
+          mentionTargetsOverride: undefined,
+          visibleMentionTargetsOverride: summaryVisibleMentionTargets,
+          messageIdOverride: `${ctx.messageId}::coordinate-summary::${claim.taskId}`,
+        },
+      );
+      const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
+        cfg,
+        agentId: "main",
+        runtime: runtime as RuntimeEnv,
+        chatId: ctx.chatId,
+        replyToMessageId: replyTargetMessageId,
+        skipReplyToInMessages: !isGroup,
+        replyInThread,
+        rootId: ctx.rootId,
+        threadReply,
+        mentionTargets: undefined,
+        visibleMentionTargets: summaryVisibleMentionTargets,
+        collaborationTaskId: claim.taskId,
+        accountId: "main",
+        messageCreateTimeMs,
+      });
+      log(
+        `feishu[${account.accountId}]: coordinate summary dispatch -> main (session=${summarySessionKey})`,
+      );
+      await runCollaborationDispatchWithRetry({
+        log: (message) => log(`feishu[${account.accountId}]: ${message}`),
+        run: () =>
+          core.channel.reply.withReplyDispatcher({
+            dispatcher,
+            onSettled: () => {
+              markDispatchIdle();
+            },
+            run: () =>
+              core.channel.reply.dispatchReplyFromConfig({
+                ctx: summaryCtxPayload,
+                cfg,
+                dispatcher,
+                replyOptions,
+              }),
+          }),
+      });
+      const latestState = getCollaborationState(claim.taskId);
+      const stateUnchanged =
+        latestState &&
+        latestState.mode === "coordinate" &&
+        latestState.phase === claim.phase &&
+        latestState.currentOwner === claim.currentOwner &&
+        latestState.speakerToken === claim.speakerToken &&
+        latestState.coordinateSummaryPending === claim.coordinateSummaryPending &&
+        latestState.coordinateSummaryDispatchKey === claim.coordinateSummaryDispatchKey &&
+        !latestState.activeHandoffState;
+      if (stateUnchanged) {
+        completeCoordinateSummary(claim.taskId);
+      }
+      collaborationState = getCollaborationState(claim.taskId) ?? claim;
     };
 
     // Parse message create_time (Feishu uses millisecond epoch string).
@@ -2531,7 +2636,7 @@ export async function handleFeishuMessage(params: {
       const normalizedRouteAgentId = normalizeAgentId(route.agentId);
       const peerCollabOrchestratedByMain =
         isGroup &&
-        normalizedRouteAgentId === "main" &&
+        normalizedRouteAgentId === normalizeAgentId(groupIntent?.rawEntryAccountId ?? "main") &&
         collaborationState?.mode === "peer_collab" &&
         !collaborationState.participants.includes("main");
       if (peerCollabOrchestratedByMain) {
@@ -2622,6 +2727,7 @@ export async function handleFeishuMessage(params: {
           collaborationState?.phase === "initial_assessment" ? normalizedRouteAgentId : undefined,
       });
       await maybeDispatchCoordinateParticipants();
+      await maybeDispatchCoordinateSummary();
       await maybeDispatchCurrentOwnerFollowup({
         previousPhase: previousCollaborationPhase,
         previousOwner: previousCollaborationOwner,

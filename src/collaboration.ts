@@ -89,6 +89,9 @@ export type CollaborationActiveHandoffState = {
 export type CollaborationState = {
   stateKey: string;
   taskId: string;
+  chatId: string;
+  threadKey: string;
+  originMessageId: string;
   mode: CollaborationMode;
   protocol?: CollaborationProtocol;
   phase: CollaborationPhase;
@@ -102,6 +105,9 @@ export type CollaborationState = {
   lastSpeakerId?: string;
   peerAssessmentDispatchedAgents: string[];
   coordinateDispatchedAgents: string[];
+  coordinateCompletedAgents: string[];
+  coordinateSummaryPending: boolean;
+  coordinateSummaryDispatchKey?: string;
   assessments: Record<string, CollaborationAssessment>;
   activeHandoffState?: CollaborationActiveHandoffState;
   recentVisibleTurns: CollaborationVisibleTurn[];
@@ -128,11 +134,14 @@ export type CollaborationRuntimeContext = {
   isCurrentOwner: boolean;
   activeHandoff?: CollaborationActiveHandoffState;
   recentVisibleTurns: CollaborationVisibleTurn[];
+  coordinateCompletedAgents?: string[];
+  coordinateSummaryPending?: boolean;
   allowedActions: CollaborationAllowedAction[];
 };
 
 const collaborationStateByKey = new Map<string, CollaborationState>();
 const collaborationStateByTaskId = new Map<string, CollaborationState>();
+const collaborationTaskIdByThreadKey = new Map<string, string>();
 const COLLABORATION_TERMINAL_TTL_MS = 10 * 60 * 1000;
 const COLLABORATION_STALE_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -151,6 +160,19 @@ export function buildCollaborationStateKey(params: {
   messageId: string;
 }): string {
   return `${params.chatId.trim()}:${params.messageId.trim()}`;
+}
+
+export function buildCollaborationThreadKey(params: {
+  chatId: string;
+  rootId?: string;
+  threadId?: string;
+  messageId: string;
+}): string {
+  const scopedThreadId = params.rootId?.trim() || params.threadId?.trim();
+  if (scopedThreadId) {
+    return `${params.chatId.trim()}:thread:${scopedThreadId}`;
+  }
+  return `${params.chatId.trim()}:message:${params.messageId.trim()}`;
 }
 
 export function buildCollaborationTaskId(params: {
@@ -205,6 +227,7 @@ function replaceState(state: CollaborationState): CollaborationState {
   };
   collaborationStateByKey.set(nextState.stateKey, nextState);
   collaborationStateByTaskId.set(nextState.taskId, nextState);
+  collaborationTaskIdByThreadKey.set(nextState.threadKey, nextState.taskId);
   return nextState;
 }
 
@@ -214,6 +237,15 @@ function computeVisibleTurnRetentionLimit(state: CollaborationState): number {
 
 function normalizeParticipants(participants: string[]): string[] {
   return [...new Set(participants.map((value) => value.trim()).filter(Boolean))];
+}
+
+function haveSameParticipants(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  const normalizedLeft = [...left].sort();
+  const normalizedRight = [...right].sort();
+  return normalizedLeft.every((value, index) => value === normalizedRight[index]);
 }
 
 export function ensureCollaborationState(params: {
@@ -228,6 +260,7 @@ export function ensureCollaborationState(params: {
 }): CollaborationState {
   sweepExpiredCollaborationStates();
   const stateKey = buildCollaborationStateKey(params);
+  const threadKey = buildCollaborationThreadKey(params);
   const normalizedParticipants = normalizeParticipants(params.participants);
   const existing = collaborationStateByKey.get(stateKey);
   if (existing) {
@@ -240,11 +273,34 @@ export function ensureCollaborationState(params: {
     collaborationStateByTaskId.set(nextState.taskId, nextState);
     return nextState;
   }
+  const existingThreadTaskId = collaborationTaskIdByThreadKey.get(threadKey);
+  if (existingThreadTaskId) {
+    const existingThreadState = collaborationStateByTaskId.get(existingThreadTaskId);
+    if (
+      existingThreadState &&
+      !isTerminalCollaborationPhase(existingThreadState.phase) &&
+      existingThreadState.mode === params.mode &&
+      haveSameParticipants(existingThreadState.participants, normalizedParticipants)
+    ) {
+      collaborationStateByKey.delete(existingThreadState.stateKey);
+      const nextState = replaceState({
+        ...existingThreadState,
+        stateKey,
+        chatId: params.chatId,
+        threadKey,
+        maxHops: Math.max(existingThreadState.maxHops, params.maxHops),
+      });
+      return nextState;
+    }
+  }
   const taskId = buildCollaborationTaskId(params);
   const protocol: CollaborationProtocol = "runtime";
   const nextState: CollaborationState = {
     stateKey,
     taskId,
+    chatId: params.chatId,
+    threadKey,
+    originMessageId: params.messageId,
     mode: params.mode,
     protocol,
     phase: params.mode === "coordinate" ? "active_collab" : "initial_assessment",
@@ -256,12 +312,15 @@ export function ensureCollaborationState(params: {
     speakerToken: params.mode === "coordinate" ? "main" : undefined,
     peerAssessmentDispatchedAgents: [],
     coordinateDispatchedAgents: [],
+    coordinateCompletedAgents: [],
+    coordinateSummaryPending: false,
     assessments: {},
     recentVisibleTurns: [],
     updatedAtMs: Date.now(),
   };
   collaborationStateByKey.set(stateKey, nextState);
   collaborationStateByTaskId.set(taskId, nextState);
+  collaborationTaskIdByThreadKey.set(threadKey, taskId);
   return nextState;
 }
 
@@ -295,7 +354,7 @@ export function recordCollaborationVisibleTurn(params: {
 }
 
 function computePeerAutoTurnLimit(state: CollaborationState): number {
-  return Math.max(1, state.participants.length * Math.max(1, state.maxHops + 1) - 1);
+  return Math.max(1, state.participants.length - 1);
 }
 
 export function resolveNextPeerAutoSpeaker(
@@ -327,7 +386,7 @@ export function advancePeerAutoTurn(
   }
   const nextAutoTurnCount = state.autoTurnCount + 1;
   if (
-    nextAutoTurnCount >= computePeerAutoTurnLimit(state) ||
+    nextAutoTurnCount > computePeerAutoTurnLimit(state) ||
     state.participants.length <= 1
   ) {
     return replaceState({
@@ -389,6 +448,9 @@ export function claimCurrentOwnerDispatch(taskId: string): CollaborationState | 
 function removeCollaborationState(state: CollaborationState): void {
   collaborationStateByKey.delete(state.stateKey);
   collaborationStateByTaskId.delete(state.taskId);
+  if (collaborationTaskIdByThreadKey.get(state.threadKey) === state.taskId) {
+    collaborationTaskIdByThreadKey.delete(state.threadKey);
+  }
 }
 
 function isTerminalCollaborationPhase(phase: CollaborationPhase): boolean {
@@ -741,6 +803,10 @@ export function applyCollaborationActions(actions: CollaborationControlAction[])
           currentOwner: action.agentId,
           speakerToken: action.completionStatus === "complete" ? undefined : action.agentId,
           currentTurnDispatchKey: undefined,
+          coordinateSummaryPending:
+            action.completionStatus === "complete" ? false : state.coordinateSummaryPending,
+          coordinateSummaryDispatchKey:
+            action.completionStatus === "complete" ? undefined : state.coordinateSummaryDispatchKey,
           activeHandoffState: undefined,
         }),
       );
@@ -799,6 +865,8 @@ export function applyCollaborationActions(actions: CollaborationControlAction[])
           phase: "completed",
           speakerToken: undefined,
           currentTurnDispatchKey: undefined,
+          coordinateSummaryPending: false,
+          coordinateSummaryDispatchKey: undefined,
           activeHandoffState: undefined,
         }),
       );
@@ -816,7 +884,11 @@ export function buildCollaborationRuntimeContext(params: {
   const allowedActions: CollaborationAllowedAction[] = [];
   if (params.state.mode === "peer_collab" && params.state.phase === "initial_assessment") {
     allowedActions.push("collab_assess");
-  } else if (params.state.phase === "active_collab" && isCurrentOwner) {
+  } else if (
+    params.state.phase === "active_collab" &&
+    isCurrentOwner &&
+    !(params.state.mode === "coordinate" && params.state.coordinateSummaryPending)
+  ) {
     if (params.state.handoffCount < params.state.maxHops) {
       allowedActions.push("agent_handoff");
     }
@@ -849,8 +921,80 @@ export function buildCollaborationRuntimeContext(params: {
     isCurrentOwner,
     activeHandoff,
     recentVisibleTurns: params.state.recentVisibleTurns,
+    coordinateCompletedAgents:
+      params.state.mode === "coordinate" ? params.state.coordinateCompletedAgents : undefined,
+    coordinateSummaryPending:
+      params.state.mode === "coordinate" ? params.state.coordinateSummaryPending : undefined,
     allowedActions,
   };
+}
+
+export function markCoordinateParticipantCompleted(
+  taskId: string,
+  agentId: string,
+): CollaborationState | undefined {
+  sweepExpiredCollaborationStates();
+  const state = collaborationStateByTaskId.get(taskId);
+  if (
+    !state ||
+    state.mode !== "coordinate" ||
+    agentId === "main" ||
+    !state.participants.includes(agentId)
+  ) {
+    return state;
+  }
+  const nextCompletedAgents = normalizeParticipants([...state.coordinateCompletedAgents, agentId]);
+  const specialistParticipants = state.participants.filter((participant) => participant !== "main");
+  const coordinateSummaryPending = specialistParticipants.every((participant) =>
+    nextCompletedAgents.includes(participant),
+  );
+  return replaceState({
+    ...state,
+    coordinateCompletedAgents: nextCompletedAgents,
+    coordinateSummaryPending,
+  });
+}
+
+export function claimCoordinateSummaryDispatch(taskId: string): CollaborationState | undefined {
+  sweepExpiredCollaborationStates();
+  const state = collaborationStateByTaskId.get(taskId);
+  if (
+    !state ||
+    state.mode !== "coordinate" ||
+    state.phase !== "active_collab" ||
+    !state.coordinateSummaryPending ||
+    state.coordinateSummaryDispatchKey
+  ) {
+    return undefined;
+  }
+  return replaceState({
+    ...state,
+    coordinateSummaryDispatchKey: `coordinate-summary:${state.taskId}`,
+    currentOwner: "main",
+    speakerToken: "main",
+    currentTurnDispatchKey: undefined,
+  });
+}
+
+export function completeCoordinateSummary(taskId: string): CollaborationState | undefined {
+  sweepExpiredCollaborationStates();
+  const state = collaborationStateByTaskId.get(taskId);
+  if (
+    !state ||
+    state.mode !== "coordinate" ||
+    state.phase !== "active_collab" ||
+    !state.coordinateSummaryPending
+  ) {
+    return state;
+  }
+  return replaceState({
+    ...state,
+    phase: "completed",
+    speakerToken: undefined,
+    currentTurnDispatchKey: undefined,
+    coordinateSummaryPending: false,
+    coordinateSummaryDispatchKey: undefined,
+  });
 }
 
 export function claimPendingCoordinateParticipants(taskId: string): {
@@ -938,6 +1082,7 @@ export function claimPendingPeerAssessmentParticipants(params: {
 export function clearCollaborationStateForTesting(): void {
   collaborationStateByKey.clear();
   collaborationStateByTaskId.clear();
+  collaborationTaskIdByThreadKey.clear();
 }
 
 export function getCollaborationState(taskId: string): CollaborationState | undefined {
