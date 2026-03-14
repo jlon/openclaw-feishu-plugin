@@ -3468,6 +3468,178 @@ describe("handleFeishuMessage command authorization", () => {
     expect(coordinateCalls.map((call) => call.ctx.AccountId)).not.toContain("starrocks-sre");
   });
 
+  it("keeps concurrent collaboration threads in the same group isolated at runtime", async () => {
+    mockCreateFeishuReplyDispatcher.mockImplementation((params) => ({
+      dispatcher: {
+        markComplete: vi.fn(),
+        waitForIdle: vi.fn(async () => {}),
+      },
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      _params: params,
+    }));
+    botOpenIds.set("main", "ou_main");
+    botOpenIds.set("coder", "ou_coder");
+    botOpenIds.set("flink-sre", "ou_flink");
+    botOpenIds.set("starrocks-sre", "ou_starrocks");
+    botNames.set("main", "首席大管家");
+    botNames.set("coder", "SoulCoder");
+    botNames.set("flink-sre", "Flink-SRE");
+    botNames.set("starrocks-sre", "Starrocks-SRE");
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "main",
+      channel: "feishu",
+      accountId: "main",
+      sessionKey: "agent:main:feishu:group:oc-group",
+      mainSessionKey: "agent:main:main",
+      matchedBy: "explicit",
+    });
+    mockDispatchReplyFromConfig.mockResolvedValue({ queuedFinal: false, counts: { final: 1 } });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          defaultAccount: "main",
+          accounts: {
+            main: {
+              enabled: true,
+              appId: "app_main",
+              appSecret: "secret_main",
+              requireMention: false,
+              groupPolicy: "open",
+              renderMode: "raw",
+              streaming: false,
+            },
+            coder: {
+              enabled: true,
+              appId: "app_coder",
+              appSecret: "secret_coder",
+              requireMention: true,
+              groupPolicy: "open",
+              renderMode: "raw",
+              streaming: false,
+              name: "SoulCoder",
+            },
+            "flink-sre": {
+              enabled: true,
+              appId: "app_flink",
+              appSecret: "secret_flink",
+              requireMention: true,
+              groupPolicy: "open",
+              renderMode: "raw",
+              streaming: false,
+              name: "Flink-SRE",
+            },
+            "starrocks-sre": {
+              enabled: true,
+              appId: "app_starrocks",
+              appSecret: "secret_starrocks",
+              requireMention: true,
+              groupPolicy: "open",
+              renderMode: "raw",
+              streaming: false,
+              name: "Starrocks-SRE",
+            },
+          },
+        },
+      },
+      agents: {
+        list: [
+          { id: "main", name: "首席大管家" },
+          { id: "coder", name: "SoulCoder" },
+          { id: "flink-sre", name: "Flink-SRE" },
+          { id: "starrocks-sre", name: "Starrocks-SRE" },
+        ],
+      },
+    } as ClawdbotConfig;
+
+    const eventA: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-user-a" } },
+      message: {
+        message_id: "msg-thread-a-1",
+        chat_id: "oc-group",
+        chat_type: "group",
+        root_id: "om-thread-a-root",
+        thread_id: "om-thread-a-root",
+        message_type: "text",
+        content: JSON.stringify({
+          text: '<at user_id="ou_coder">SoulCoder</at> <at user_id="ou_flink">Flink-SRE</at> 你俩讨论一下这个问题',
+        }),
+        mentions: [
+          { key: "@_user_1", name: "SoulCoder", id: { open_id: "ou_coder" } },
+          { key: "@_user_2", name: "Flink-SRE", id: { open_id: "ou_flink" } },
+        ],
+      },
+    };
+    const eventB: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-user-b" } },
+      message: {
+        message_id: "msg-thread-b-1",
+        chat_id: "oc-group",
+        chat_type: "group",
+        root_id: "om-thread-b-root",
+        thread_id: "om-thread-b-root",
+        message_type: "text",
+        content: JSON.stringify({
+          text: '<at user_id="ou_flink">Flink-SRE</at> <at user_id="ou_starrocks">Starrocks-SRE</at> 你俩先看，最后给我一个结论',
+        }),
+        mentions: [
+          { key: "@_user_1", name: "Flink-SRE", id: { open_id: "ou_flink" } },
+          { key: "@_user_2", name: "Starrocks-SRE", id: { open_id: "ou_starrocks" } },
+        ],
+      },
+    };
+
+    await handleFeishuMessage({
+      cfg,
+      event: eventA,
+      accountId: "main",
+      botOpenId: "ou_main",
+      botName: "首席大管家",
+      runtime: createRuntimeEnv(),
+    });
+    await handleFeishuMessage({
+      cfg,
+      event: eventB,
+      accountId: "main",
+      botOpenId: "ou_main",
+      botName: "首席大管家",
+      runtime: createRuntimeEnv(),
+    });
+
+    const calls = mockDispatchReplyFromConfig.mock.calls.map(
+      (call) => call[0] as { ctx: Record<string, string> },
+    );
+    const threadATaskIds = new Set(
+      calls
+        .filter((call) => call.ctx.RootMessageId === "om-thread-a-root")
+        .map((call) => call.ctx.CollaborationTaskId)
+        .filter(Boolean),
+    );
+    const threadBTaskIds = new Set(
+      calls
+        .filter((call) => call.ctx.RootMessageId === "om-thread-b-root")
+        .map((call) => call.ctx.CollaborationTaskId)
+        .filter(Boolean),
+    );
+    expect(threadATaskIds.size).toBe(1);
+    expect(threadBTaskIds.size).toBe(1);
+    expect([...threadATaskIds][0]).not.toBe([...threadBTaskIds][0]);
+
+    const threadAParticipants = calls
+      .filter((call) => call.ctx.RootMessageId === "om-thread-a-root" && call.ctx.CollaborationMode === "peer_collab")
+      .map((call) => call.ctx.AccountId)
+      .filter((value) => value !== "main")
+      .sort();
+    const threadBParticipants = calls
+      .filter((call) => call.ctx.RootMessageId === "om-thread-b-root" && call.ctx.CollaborationMode === "coordinate")
+      .map((call) => call.ctx.AccountId)
+      .filter((value) => value !== "main")
+      .sort();
+    expect(threadAParticipants).toEqual(["coder", "flink-sre"]);
+    expect(threadBParticipants).toEqual(["flink-sre", "starrocks-sre"]);
+  });
+
   it("preserves display-only visible mentions for single-agent group replies with other mentioned entities", async () => {
     botOpenIds.set("starrocks-sre", "ou_starrocks_self");
     mockResolveAgentRoute.mockReturnValue({
