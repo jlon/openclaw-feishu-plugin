@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { buildFeishuAgentBody, parseFeishuMessageEvent } from "./bot.js";
 import { resolveCollaborationStateForMessage } from "./collaboration.js";
 import {
+  buildConfiguredBotAliasMap,
   classifyGroupCoAddressMode,
+  extractMentionedBotAccountIds,
   resolveExplicitGroupCoAddressParticipants,
   resolveGroupIntentForEventWithActiveThread,
 } from "./mention.js";
@@ -375,6 +377,75 @@ describe("group collaboration matrix", () => {
     expect(classifyGroupCoAddressMode({ event: event as any, mentionedBotCount: 2, mainMentioned: false })).toBe(
       "peer_collab",
     );
+  });
+
+  it("9a. configured account display names act as stable internal aliases", () => {
+    const aliasMap = buildConfiguredBotAliasMap({
+      channels: {
+        feishu: {
+          accounts: {
+            coder: { name: "SoulCoder" },
+          },
+        },
+      },
+      agents: {
+        list: [{ id: "coder", groupChat: { mentionPatterns: ["@coder"] } }],
+      },
+      bindings: [
+        {
+          agentId: "coder",
+          match: {
+            channel: "feishu",
+            accountId: "coder",
+          },
+        },
+      ],
+    } as any);
+    const event = makeEvent({
+      text: "@SoulCoder 看下这个问题",
+      mentions: [{ openId: "ou_unreliable_cross_app_id", name: "SoulCoder", key: "@_user_1" }],
+    });
+    expect(
+      extractMentionedBotAccountIds({
+        event: event as any,
+        botOpenIdMap: new Map([["coder", "ou_self_coder"]]),
+        accountAliasMap: aliasMap,
+      }),
+    ).toEqual(["coder"]);
+  });
+
+  it("9b. configured account display names let main skip when only that specialist is addressed", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          accounts: {
+            main: { name: "首席大管家" },
+            coder: { name: "SoulCoder" },
+          },
+        },
+      },
+      agents: {
+        list: [{ id: "main" }, { id: "coder", groupChat: { mentionPatterns: ["@coder"] } }],
+      },
+      bindings: [
+        { agentId: "main", match: { channel: "feishu", accountId: "main" } },
+        { agentId: "coder", match: { channel: "feishu", accountId: "coder" } },
+      ],
+    } as any;
+    setFeishuBotOpenIdForTesting("main", "ou_main");
+    setFeishuBotOpenIdForTesting("coder", "ou_self_coder");
+    const event = makeEvent({
+      text: "@SoulCoder 看下这个问题",
+      mentions: [{ openId: "ou_cross_app_view", name: "SoulCoder", key: "@_user_1" }],
+    });
+    expect(
+      shouldSkipDispatchForMentionPolicy({
+        cfg,
+        accountId: "main",
+        currentBotOpenId: "ou_main",
+        event: event as any,
+      }),
+    ).toBe(true);
   });
 
   it("8d. active thread follow-up can upgrade to coordinate without re-mentioning bots", () => {

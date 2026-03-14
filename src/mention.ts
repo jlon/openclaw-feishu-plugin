@@ -1,3 +1,4 @@
+import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { parsePostContent } from "./post.js";
 import type { FeishuMessageEvent } from "./bot.js";
 
@@ -95,6 +96,75 @@ function normalizeExplicitParticipantToken(value: string | undefined): string {
     .replace(/[\s_-]+/g, "");
 }
 
+function normalizeConfiguredMentionAlias(value: string | undefined): string {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return "";
+  }
+  return normalizeBotIdentifier(trimmed.replace(/^@+/u, ""));
+}
+
+export function buildConfiguredBotAliasMap(
+  cfg?: ClawdbotConfig,
+): Map<string, readonly string[]> {
+  const aliases = new Map<string, Set<string>>();
+  const addAlias = (accountId: string | undefined, value: string | undefined) => {
+    const normalizedAccountId = accountId?.trim();
+    const normalizedAlias = normalizeConfiguredMentionAlias(value);
+    if (!normalizedAccountId || !normalizedAlias) {
+      return;
+    }
+    const current = aliases.get(normalizedAccountId) ?? new Set<string>();
+    current.add(normalizedAlias);
+    aliases.set(normalizedAccountId, current);
+  };
+  const feishuAccounts = (cfg?.channels?.feishu?.accounts ?? {}) as Record<string, unknown>;
+  const agentsById = new Map(
+    (cfg?.agents?.list ?? [])
+      .filter(
+        (agent): agent is {
+          id: string;
+          name?: string;
+          groupChat?: { mentionPatterns?: string[] };
+        } => typeof agent?.id === "string",
+      )
+      .map((agent) => [agent.id.trim(), agent]),
+  );
+  for (const accountId of Object.keys(feishuAccounts)) {
+    addAlias(accountId, accountId);
+    const account = feishuAccounts[accountId] as Record<string, unknown>;
+    if (typeof account?.name === "string") {
+      addAlias(accountId, account.name);
+    }
+    const matchingBinding = (cfg?.bindings ?? []).find(
+      (binding) =>
+        binding?.match?.channel === "feishu" &&
+        typeof binding?.match?.accountId === "string" &&
+        binding.match.accountId.trim() === accountId &&
+        typeof binding?.agentId === "string",
+    );
+    const fallbackAgentId = agentsById.has(accountId) ? accountId : undefined;
+    const agentId =
+      (typeof matchingBinding?.agentId === "string" && matchingBinding.agentId.trim()) ||
+      fallbackAgentId;
+    if (!agentId) {
+      continue;
+    }
+    addAlias(accountId, agentId);
+    const agent = agentsById.get(agentId);
+    if (!agent) {
+      continue;
+    }
+    addAlias(accountId, agent.name);
+    for (const pattern of agent.groupChat?.mentionPatterns ?? []) {
+      addAlias(accountId, pattern);
+    }
+  }
+  return new Map(
+    [...aliases.entries()].map(([accountId, values]) => [accountId, [...values]] as const),
+  );
+}
+
 export function extractEventText(event: FeishuMessageEvent): string {
   const raw = event.message.content ?? "";
   try {
@@ -179,8 +249,9 @@ export function extractMentionedBotAccountIds(params: {
   event: FeishuMessageEvent;
   botOpenIdMap: ReadonlyMap<string, string>;
   botNameMap?: ReadonlyMap<string, string>;
+  accountAliasMap?: ReadonlyMap<string, readonly string[]>;
 }): string[] {
-  const { event, botOpenIdMap, botNameMap } = params;
+  const { event, botOpenIdMap, botNameMap, accountAliasMap } = params;
   const mentionedOpenIds = extractMentionedOpenIds(event);
   const mentionedNames = new Set(
     [
@@ -196,9 +267,11 @@ export function extractMentionedBotAccountIds(params: {
     }
     const normalizedAccountId = normalizeBotIdentifier(accountId);
     const normalizedBotName = normalizeBotIdentifier(botNameMap?.get(accountId));
+    const normalizedAliases = (accountAliasMap?.get(accountId) ?? []).filter(Boolean);
     if (
       (normalizedAccountId && mentionedNames.has(normalizedAccountId)) ||
-      (normalizedBotName && mentionedNames.has(normalizedBotName))
+      (normalizedBotName && mentionedNames.has(normalizedBotName)) ||
+      normalizedAliases.some((alias) => mentionedNames.has(alias))
     ) {
       mentionedAccountIds.add(accountId);
     }
@@ -411,6 +484,7 @@ export function resolveGroupIntentForEvent(params: {
   event: FeishuMessageEvent;
   botOpenIdMap: ReadonlyMap<string, string>;
   botNameMap?: ReadonlyMap<string, string>;
+  accountAliasMap?: ReadonlyMap<string, readonly string[]>;
   mainAccountId?: string;
   activeThreadMode?: Extract<GroupCoAddressMode, "peer_collab" | "coordinate">;
   activeThreadParticipants?: readonly string[];
@@ -424,6 +498,7 @@ export function resolveGroupIntentForEvent(params: {
       event: params.event,
       botOpenIdMap: params.botOpenIdMap,
       botNameMap: params.botNameMap,
+      accountAliasMap: params.accountAliasMap,
     }),
     knownAccountIds: [...params.botOpenIdMap.keys()],
     botNameMap: params.botNameMap,
@@ -437,6 +512,7 @@ export function resolveGroupIntentForEventWithActiveThread(params: {
   event: FeishuMessageEvent;
   botOpenIdMap: ReadonlyMap<string, string>;
   botNameMap?: ReadonlyMap<string, string>;
+  accountAliasMap?: ReadonlyMap<string, readonly string[]>;
   mainAccountId?: string;
   activeThreadState?: {
     mode?: Extract<GroupCoAddressMode, "peer_collab" | "coordinate">;
@@ -447,6 +523,7 @@ export function resolveGroupIntentForEventWithActiveThread(params: {
     event: params.event,
     botOpenIdMap: params.botOpenIdMap,
     botNameMap: params.botNameMap,
+    accountAliasMap: params.accountAliasMap,
     mainAccountId: params.mainAccountId,
     activeThreadMode: params.activeThreadState?.mode,
     activeThreadParticipants: params.activeThreadState?.participants,
@@ -474,7 +551,12 @@ function extractMentionTargetsFromContent(
 
   while ((match = pattern.exec(text)) !== null) {
     const openId = match[1]?.trim();
-    const name = match[2]?.trim();
+    const rawName = match[2]?.trim();
+    const resolvedName =
+      rawName && !/^@_user_\d+$/u.test(rawName)
+        ? rawName
+        : (event.message.mentions ?? []).find((mention) => mention.id.open_id?.trim() === openId)?.name?.trim();
+    const name = resolvedName || rawName;
     if (!openId || !name) {
       continue;
     }

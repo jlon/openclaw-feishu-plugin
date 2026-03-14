@@ -20,6 +20,7 @@ import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { downloadMessageResourceFeishu } from "./media.js";
 import {
+  buildConfiguredBotAliasMap,
   extractMentionTargets,
   extractMentionedBotAccountIds,
   extractMentionedBotTokensFromText,
@@ -520,7 +521,12 @@ function formatSubMessageContent(content: string, contentType: string): string {
   }
 }
 
-function checkBotMentioned(event: FeishuMessageEvent, botOpenId?: string, botName?: string): boolean {
+function checkBotMentioned(
+  event: FeishuMessageEvent,
+  botOpenId?: string,
+  botName?: string,
+  botAliases: readonly string[] = [],
+): boolean {
   if (!botOpenId) return false;
   const rawContent = event.message.content ?? "";
   if (rawContent.includes("@_all")) return true;
@@ -529,13 +535,22 @@ function checkBotMentioned(event: FeishuMessageEvent, botOpenId?: string, botNam
   }
   const mentionedTextTokens = extractMentionedBotTokensFromText(event);
   const normalizedBotName = normalizeBotIdentifier(botName);
+  const normalizedAliases = botAliases.map((alias) => normalizeBotIdentifier(alias)).filter(Boolean);
   const normalizedAccountId =
     normalizeBotIdentifier(
       [...botNames.entries()].find(([, name]) => normalizeBotIdentifier(name) === normalizedBotName)?.[0],
     ) || "";
+  const mentionedByAlias = normalizedAliases.some((alias) => mentionedTextTokens.includes(alias));
+  const mentionedByMentionName =
+    normalizedAliases.length > 0 &&
+    (event.message.mentions ?? []).some((mention) =>
+      normalizedAliases.includes(normalizeBotIdentifier(mention.name)),
+    );
   return Boolean(
     (normalizedBotName && mentionedTextTokens.includes(normalizedBotName)) ||
-    (normalizedAccountId && mentionedTextTokens.includes(normalizedAccountId))
+    (normalizedAccountId && mentionedTextTokens.includes(normalizedAccountId)) ||
+    mentionedByAlias ||
+    mentionedByMentionName
   );
 }
 
@@ -850,9 +865,10 @@ export function parseFeishuMessageEvent(
   event: FeishuMessageEvent,
   botOpenId?: string,
   botName?: string,
+  botAliases: readonly string[] = [],
 ): FeishuMessageContext {
   const rawContent = parseMessageContent(event.message.content, event.message.message_type);
-  const mentionedBot = checkBotMentioned(event, botOpenId, botName);
+  const mentionedBot = checkBotMentioned(event, botOpenId, botName, botAliases);
   const hasAnyMention = (event.message.mentions?.length ?? 0) > 0;
   // Strip the bot's own mention so slash commands like @Bot /help retain
   // the leading /. This applies in both p2p *and* group contexts — the
@@ -955,6 +971,11 @@ export function buildFeishuAgentBody(params: {
     messageBody +=
       `\n[System: Your visible reply will automatically @mention ${visibleTargetNames} for display only. ` +
       `Do not write @xxx or <at ...> yourself.]`;
+    if (!ctx.collaboration && !ctx.groupCoAddressMode) {
+      messageBody +=
+        `\n[System: These other current-turn mentions are display context only. ` +
+        `Do not use sessions_send, sessions_spawn, subagents, or message to force them into the conversation unless runtime collaboration context is explicitly injected.]`;
+    }
   }
 
   if (ctx.groupCoAddressMode === "direct_reply") {
@@ -1171,7 +1192,9 @@ export async function handleFeishuMessage(params: {
     return;
   }
 
-  let ctx = parseFeishuMessageEvent(event, botOpenId, botName);
+  const configuredBotAliasMap = buildConfiguredBotAliasMap(cfg);
+  const currentBotAliases = configuredBotAliasMap.get(account.accountId) ?? [];
+  let ctx = parseFeishuMessageEvent(event, botOpenId, botName, currentBotAliases);
   const isGroup = ctx.chatType === "group";
   const isDirect = !isGroup;
   const senderUserId = event.sender.sender_id.user_id?.trim() || undefined;
@@ -1192,6 +1215,7 @@ export async function handleFeishuMessage(params: {
         event,
         botOpenIdMap: botOpenIds,
         botNameMap: botNames,
+        accountAliasMap: configuredBotAliasMap,
         mainAccountId: "main",
         activeThreadState: activeThreadIntent,
       });
@@ -2616,6 +2640,8 @@ export async function handleFeishuMessage(params: {
             )
           : collaborationState?.mode === "peer_collab"
             ? buildPeerCollabVisibleMentionTargets(collaborationState, route.agentId)
+            : isGroup && groupIntent?.mode === "none"
+              ? extractMentionTargets(event, botOpenId)
             : undefined;
       const effectiveRouteSessionKey = buildCollaborationSessionKey(
         route.sessionKey,

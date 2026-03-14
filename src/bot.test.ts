@@ -131,6 +131,24 @@ describe("buildFeishuAgentBody", () => {
     expect(body).not.toContain("Your reply will automatically @mention:");
   });
 
+  it("treats visible mention targets in non-collaboration group turns as display-only context", () => {
+    const body = buildFeishuAgentBody({
+      ctx: {
+        chatType: "group",
+        content: "我先回答自己的部分",
+        senderName: "Sender Name",
+        senderOpenId: "ou-sender",
+        messageId: "msg-44",
+        visibleMentionTargets: [{ openId: "ou-target", name: "SoulCoder", key: "@_user_1" }],
+      },
+    });
+
+    expect(body).toContain(
+      "Your visible reply will automatically @mention SoulCoder for display only.",
+    );
+    expect(body).toContain("These other current-turn mentions are display context only.");
+  });
+
   it("uses a minimal body for synthetic debug messages when enabled", () => {
     const previous = process.env.OPENCLAW_FEISHU_SYNTHETIC_MINIMAL_BODY;
     process.env.OPENCLAW_FEISHU_SYNTHETIC_MINIMAL_BODY = "1";
@@ -2172,6 +2190,85 @@ describe("handleFeishuMessage command authorization", () => {
     for (const ctx of collaborationSessionKeys) {
       expect(ctx.SessionKey).toContain(`:task:${ctx.CollaborationTaskId}`);
     }
+  });
+
+  it("preserves display-only visible mentions for single-agent group replies with other mentioned entities", async () => {
+    botOpenIds.set("starrocks-sre", "ou_starrocks_self");
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "starrocks-sre",
+      channel: "feishu",
+      accountId: "starrocks-sre",
+      sessionKey: "agent:starrocks-sre:feishu:group:oc-group",
+      mainSessionKey: "agent:main:main",
+      matchedBy: "explicit",
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          accounts: {
+            "starrocks-sre": {
+              enabled: true,
+              appId: "app_starrocks",
+              appSecret: "secret_starrocks",
+              requireMention: true,
+              groupPolicy: "open",
+            },
+          },
+        },
+      },
+      agents: {
+        list: [{ id: "starrocks-sre" }],
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-user",
+        },
+      },
+      message: {
+        message_id: "msg-single-visible-mention",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({
+          text: '<at user_id="ou_starrocks_self">@_user_1</at> <at user_id="ou_other_bot_view">@_user_2</at> 你俩辩论下，明天会更好吗？',
+        }),
+        mentions: [
+          {
+            key: "@_user_1",
+            id: { open_id: "ou_starrocks_self" },
+            name: "Starrocks-SRE",
+            tenant_key: "",
+          },
+          {
+            key: "@_user_2",
+            id: { open_id: "ou_other_bot_view" },
+            name: "SoulCoder",
+            tenant_key: "",
+          },
+        ],
+      },
+    };
+
+    await handleFeishuMessage({
+      cfg,
+      event,
+      accountId: "starrocks-sre",
+      botOpenId: "ou_starrocks_self",
+      botName: "Starrocks-SRE",
+      runtime: createRuntimeEnv(),
+    });
+
+    const dispatcherParams = mockCreateFeishuReplyDispatcher.mock.calls.at(-1)?.[0];
+    expect(dispatcherParams.visibleMentionTargets).toEqual([
+      expect.objectContaining({
+        openId: "ou_other_bot_view",
+        name: "SoulCoder",
+      }),
+    ]);
   });
 
   it("uses authorizer resolution instead of hardcoded CommandAuthorized=true", async () => {

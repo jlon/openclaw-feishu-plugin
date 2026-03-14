@@ -20,6 +20,7 @@ import {
 } from "./dedup.js";
 import { getActiveCollaborationIntentForThread } from "./collaboration.js";
 import {
+  buildConfiguredBotAliasMap,
   extractMentionedBotAccountIds,
   extractMentionedOpenIds,
   isMentionForwardRequest,
@@ -39,13 +40,16 @@ const PRIMARY_FEISHU_ACCOUNT_ID = "main";
 
 function resolveEffectiveGroupIntentForEvent(params: {
   event: FeishuMessageEvent;
+  cfg?: ClawdbotConfig;
   botOpenIdMap?: ReadonlyMap<string, string>;
   botNameMap?: ReadonlyMap<string, string>;
+  accountAliasMap?: ReadonlyMap<string, readonly string[]>;
 }): GroupCoAddressIntent | undefined {
   if (params.event.message.chat_type !== "group") {
     return undefined;
   }
   const { botOpenIdMap = botOpenIds, botNameMap = botNames } = params;
+  const accountAliasMap = params.accountAliasMap ?? buildConfiguredBotAliasMap(params.cfg);
   const activeThreadState = getActiveCollaborationIntentForThread({
     chatId: params.event.message.chat_id,
     rootId: params.event.message.root_id,
@@ -55,6 +59,7 @@ function resolveEffectiveGroupIntentForEvent(params: {
     event: params.event,
     botOpenIdMap,
     botNameMap,
+    accountAliasMap,
     mainAccountId: PRIMARY_FEISHU_ACCOUNT_ID,
     activeThreadState,
   });
@@ -261,18 +266,22 @@ function resolveFeishuDebounceMentions(params: {
 
 export function shouldSkipDispatchForMentionPolicy(params: {
   accountId: string;
+  cfg?: ClawdbotConfig;
   event: FeishuMessageEvent;
   currentBotOpenId?: string;
   botOpenIdMap?: ReadonlyMap<string, string>;
   botNameMap?: ReadonlyMap<string, string>;
+  accountAliasMap?: ReadonlyMap<string, readonly string[]>;
   groupIntentOverride?: GroupCoAddressIntent;
 }): boolean {
   const {
     accountId,
+    cfg,
     event,
     currentBotOpenId,
     botOpenIdMap = botOpenIds,
     botNameMap = botNames,
+    accountAliasMap = buildConfiguredBotAliasMap(cfg),
     groupIntentOverride,
   } = params;
   if (event.message.chat_type !== "group") {
@@ -282,21 +291,24 @@ export function shouldSkipDispatchForMentionPolicy(params: {
     event,
     botOpenIdMap,
     botNameMap,
+    accountAliasMap,
   });
   const groupIntent =
     groupIntentOverride ??
     resolveEffectiveGroupIntentForEvent({
       event,
+      cfg,
       botOpenIdMap,
       botNameMap,
+      accountAliasMap,
     });
   const effectiveMentionedBotAccountIds = groupIntent.rawParticipants;
   const mentionedOpenIds = extractMentionedOpenIds(event);
   const currentMentionedByName = Boolean(
-    normalizeBotIdentifier(botNameMap.get(accountId)) &&
-      (event.message.mentions ?? []).some(
-        (mention) =>
-          normalizeBotIdentifier(mention.name) === normalizeBotIdentifier(botNameMap.get(accountId)),
+    [...new Set([normalizeBotIdentifier(botNameMap.get(accountId)), ...(accountAliasMap.get(accountId) ?? [])])]
+      .filter(Boolean)
+      .some((alias) =>
+        (event.message.mentions ?? []).some((mention) => normalizeBotIdentifier(mention.name) === alias),
       ),
   );
   if (mentionedOpenIds.length === 0 && effectiveMentionedBotAccountIds.length === 0) {
@@ -509,10 +521,16 @@ function registerEventHandlers(
         const event = data as unknown as FeishuMessageEvent;
         const botOpenId = botOpenIds.get(accountId);
         const groupIntent =
-          event.message.chat_type === "group" ? resolveEffectiveGroupIntentForEvent({ event }) : undefined;
+          event.message.chat_type === "group"
+            ? resolveEffectiveGroupIntentForEvent({
+                event,
+                cfg,
+              })
+            : undefined;
         if (
           shouldSkipDispatchForMentionPolicy({
             accountId,
+            cfg,
             event,
             currentBotOpenId: botOpenId,
             groupIntentOverride: groupIntent,
