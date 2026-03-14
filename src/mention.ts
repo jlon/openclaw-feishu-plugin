@@ -500,7 +500,14 @@ export function resolveGroupCoAddressIntent(params: {
     isGroupCollectiveScopeRequest(event) &&
     rawParticipants.some((participant) => participant !== mainAccountId)
   ) {
-    rawParticipants = normalizeParticipants([mainAccountId, ...activeThreadParticipants, ...rawParticipants]);
+    const mentionedParticipants = rawParticipants.filter((participant) => participant !== mainAccountId);
+    const activeParticipantSet = new Set(activeThreadParticipants);
+    rawParticipants = normalizeParticipants(
+      mentionedParticipants.length > 0 &&
+        mentionedParticipants.every((participant) => activeParticipantSet.has(participant))
+        ? [mainAccountId, ...mentionedParticipants]
+        : [mainAccountId, ...activeThreadParticipants, ...rawParticipants],
+    );
     scope = "active_thread";
   }
   let mode = classifyGroupCoAddressMode({
