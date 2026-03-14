@@ -100,6 +100,7 @@ export type CollaborationState = {
   chatId: string;
   threadKey: string;
   originMessageId: string;
+  coordinatorAccountId: string;
   mode: CollaborationMode;
   protocol?: CollaborationProtocol;
   phase: CollaborationPhase;
@@ -134,6 +135,7 @@ export type CollaborationRuntimeContext = {
   mode: CollaborationMode;
   protocol?: CollaborationProtocol;
   phase: CollaborationPhase;
+  coordinatorAccountId: string;
   participants: string[];
   maxHops: number;
   handoffCount: number;
@@ -275,7 +277,7 @@ function filterTurnsForParticipants(
 }
 
 function getCoordinateSpecialistParticipants(state: CollaborationState): string[] {
-  return state.participants.filter((participant) => participant !== "main");
+  return state.participants.filter((participant) => participant !== state.coordinatorAccountId);
 }
 
 function isCoordinateParticipantSettled(state: CollaborationState, agentId: string): boolean {
@@ -304,15 +306,16 @@ function migrateActiveThreadState(params: {
   nextMode: CollaborationMode;
   nextParticipants: string[];
   nextMaxHops: number;
+  nextCoordinatorAccountId: string;
 }): CollaborationState {
   const participants =
     params.nextMode === "coordinate"
       ? normalizeParticipants(
-          params.nextParticipants.includes("main")
+          params.nextParticipants.includes(params.nextCoordinatorAccountId)
             ? params.nextParticipants
-            : ["main", ...params.nextParticipants],
+            : [params.nextCoordinatorAccountId, ...params.nextParticipants],
         )
-      : params.nextParticipants.filter((participant) => participant !== "main");
+      : params.nextParticipants.filter((participant) => participant !== params.nextCoordinatorAccountId);
   const recentVisibleTurns = filterTurnsForParticipants(params.state.recentVisibleTurns, participants);
   return replaceState({
     ...params.state,
@@ -320,12 +323,13 @@ function migrateActiveThreadState(params: {
     chatId: params.nextChatId,
     threadKey: params.nextThreadKey,
     originMessageId: params.nextMessageId,
+    coordinatorAccountId: params.nextCoordinatorAccountId,
     mode: params.nextMode,
     participants,
     maxHops: Math.max(params.state.maxHops, params.nextMaxHops),
     phase: params.nextMode === "coordinate" ? "active_collab" : "initial_assessment",
-    currentOwner: params.nextMode === "coordinate" ? "main" : undefined,
-    speakerToken: params.nextMode === "coordinate" ? "main" : undefined,
+    currentOwner: params.nextMode === "coordinate" ? params.nextCoordinatorAccountId : undefined,
+    speakerToken: params.nextMode === "coordinate" ? params.nextCoordinatorAccountId : undefined,
     handoffCount: 0,
     autoTurnCount: 0,
     peerAssessmentDispatchedAgents: [],
@@ -350,11 +354,13 @@ export function ensureCollaborationState(params: {
   participants: string[];
   maxHops: number;
   explicitMode?: Exclude<GroupCoAddressMode, "none">;
+  coordinatorAccountId?: string;
 }): CollaborationState {
   sweepExpiredCollaborationStates();
   const stateKey = buildCollaborationStateKey(params);
   const threadKey = buildCollaborationThreadKey(params);
   const normalizedParticipants = normalizeParticipants(params.participants);
+  const coordinatorAccountId = params.coordinatorAccountId?.trim() || "main";
   const existing = collaborationStateByKey.get(stateKey);
   if (existing) {
     const mergedParticipants = normalizeParticipants([...existing.participants, ...normalizedParticipants]);
@@ -410,6 +416,7 @@ export function ensureCollaborationState(params: {
           nextMode: params.mode,
           nextParticipants: normalizedParticipants.length > 0 ? normalizedParticipants : existingThreadState.participants,
           nextMaxHops: params.maxHops,
+          nextCoordinatorAccountId: coordinatorAccountId,
         });
       }
     }
@@ -422,6 +429,7 @@ export function ensureCollaborationState(params: {
     chatId: params.chatId,
     threadKey,
     originMessageId: params.messageId,
+    coordinatorAccountId,
     mode: params.mode,
     protocol,
     phase: params.mode === "coordinate" ? "active_collab" : "initial_assessment",
@@ -429,8 +437,8 @@ export function ensureCollaborationState(params: {
     maxHops: params.maxHops,
     handoffCount: 0,
     autoTurnCount: 0,
-    currentOwner: params.mode === "coordinate" ? "main" : undefined,
-    speakerToken: params.mode === "coordinate" ? "main" : undefined,
+    currentOwner: params.mode === "coordinate" ? coordinatorAccountId : undefined,
+    speakerToken: params.mode === "coordinate" ? coordinatorAccountId : undefined,
     peerAssessmentDispatchedAgents: [],
     coordinateDispatchedAgents: [],
     coordinateCompletedAgents: [],
@@ -879,7 +887,7 @@ export function applyCollaborationActions(actions: CollaborationControlAction[])
       if (
         state.mode !== "coordinate" ||
         state.phase !== "active_collab" ||
-        action.agentId === "main"
+        action.agentId === state.coordinatorAccountId
       ) {
         continue;
       }
@@ -1070,7 +1078,7 @@ export function buildCollaborationRuntimeContext(params: {
     params.state.mode === "coordinate" &&
     params.state.phase === "active_collab" &&
     !isCurrentOwner &&
-    params.agentId !== "main" &&
+    params.agentId !== params.state.coordinatorAccountId &&
     params.state.participants.includes(params.agentId)
   ) {
     allowedActions.push("collab_report_complete");
@@ -1102,6 +1110,7 @@ export function buildCollaborationRuntimeContext(params: {
     mode: params.state.mode,
     protocol: params.state.protocol,
     phase: params.state.phase,
+    coordinatorAccountId: params.state.coordinatorAccountId,
     participants: params.state.participants,
     maxHops: params.state.maxHops,
     handoffCount: params.state.handoffCount,
@@ -1130,7 +1139,7 @@ export function markCoordinateParticipantCompleted(
   if (
     !state ||
     state.mode !== "coordinate" ||
-    agentId === "main" ||
+    agentId === state.coordinatorAccountId ||
     !state.participants.includes(agentId)
   ) {
     return state;
@@ -1155,7 +1164,7 @@ export function markCoordinateParticipantFailed(
   if (
     !state ||
     state.mode !== "coordinate" ||
-    agentId === "main" ||
+    agentId === state.coordinatorAccountId ||
     !state.participants.includes(agentId) ||
     state.coordinateCompletedAgents.includes(agentId)
   ) {
@@ -1189,8 +1198,8 @@ export function claimCoordinateSummaryDispatch(taskId: string): CollaborationSta
   return replaceState({
     ...state,
     coordinateSummaryDispatchKey: `coordinate-summary:${state.taskId}`,
-    currentOwner: "main",
-    speakerToken: "main",
+    currentOwner: state.coordinatorAccountId,
+    speakerToken: state.coordinatorAccountId,
     currentTurnDispatchKey: undefined,
   });
 }
@@ -1226,7 +1235,7 @@ export function claimPendingCoordinateParticipants(taskId: string): {
     !state ||
     state.mode !== "coordinate" ||
     state.phase !== "active_collab" ||
-    state.currentOwner !== "main" ||
+    state.currentOwner !== state.coordinatorAccountId ||
     state.activeHandoffState
   ) {
     return {
@@ -1371,6 +1380,7 @@ export function resolveCollaborationStateForMessage(params: {
   participants: string[];
   maxHops: number;
   explicitMode?: Exclude<GroupCoAddressMode, "none">;
+  coordinatorAccountId?: string;
 }): CollaborationState {
   return ensureCollaborationState({
     chatId: params.event.message.chat_id,
@@ -1381,5 +1391,6 @@ export function resolveCollaborationStateForMessage(params: {
     participants: params.participants,
     maxHops: params.maxHops,
     explicitMode: params.explicitMode,
+    coordinatorAccountId: params.coordinatorAccountId,
   });
 }

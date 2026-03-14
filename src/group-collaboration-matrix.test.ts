@@ -263,6 +263,37 @@ describe("group collaboration matrix", () => {
     );
   });
 
+  it("8c. a non-main default account acts as the coordinator raw entry", () => {
+    setFeishuBotOpenIdForTesting("dispatcher", "ou_dispatcher");
+    setFeishuBotOpenIdForTesting("coder", "ou_coder");
+    const event = makeEvent({
+      text: "@调度员 @SoulCoder 你俩讨论下明天会更好吗",
+      mentions: [
+        { openId: "ou_dispatcher", name: "调度员", key: "@_user_1" },
+        { openId: "ou_coder", name: "SoulCoder", key: "@_user_2" },
+      ],
+    });
+    const intent = resolveGroupIntentForEventWithActiveThread({
+      event: event as any,
+      botOpenIdMap: new Map([
+        ["dispatcher", "ou_dispatcher"],
+        ["coder", "ou_coder"],
+      ]),
+      botNameMap: new Map([
+        ["dispatcher", "调度员"],
+        ["coder", "SoulCoder"],
+      ]),
+      mainAccountId: "dispatcher",
+    });
+    expect(intent).toEqual(
+      expect.objectContaining({
+        mode: "peer_collab",
+        rawEntryAccountId: "dispatcher",
+        participants: ["dispatcher", "coder"],
+      }),
+    );
+  });
+
   it("8a. multi-bot requests that ask for a final answer route to coordinate even without @main", () => {
     setFeishuBotOpenIdForTesting("main", "ou_main");
     setFeishuBotOpenIdForTesting("flink-sre", "ou_flink");
@@ -448,6 +479,7 @@ describe("group collaboration matrix", () => {
     const cfg = {
       channels: {
         feishu: {
+          defaultAccount: "main",
           accounts: {
             main: { name: "首席大管家" },
             coder: { name: "SoulCoder" },

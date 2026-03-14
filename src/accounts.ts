@@ -68,6 +68,10 @@ export function resolveDefaultFeishuAccountId(cfg: ClawdbotConfig): string {
   return resolveDefaultFeishuAccountSelection(cfg).accountId;
 }
 
+export function resolveCoordinatorFeishuAccountId(cfg: ClawdbotConfig): string {
+  return resolveDefaultFeishuAccountId(cfg);
+}
+
 /**
  * Get the raw account-specific config.
  */

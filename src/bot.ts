@@ -13,7 +13,7 @@ import {
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/feishu";
-import { resolveFeishuAccount } from "./accounts.js";
+import { resolveCoordinatorFeishuAccountId, resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { tryRecordMessage, tryRecordMessagePersistent } from "./dedup.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
@@ -1042,7 +1042,10 @@ export function buildFeishuAgentBody(params: {
     } else if (collaboration.phase === "active_collab") {
       if (collaboration.isCurrentOwner) {
         const canHandoff = collaboration.allowedActions.includes("agent_handoff");
-        if (collaboration.mode === "coordinate" && agentId === "main") {
+        if (
+          collaboration.mode === "coordinate" &&
+          agentId === collaboration.coordinatorAccountId
+        ) {
         if (collaboration.coordinateSummaryPending) {
           messageBody +=
               `\n[System: All responding specialists have settled. Your job now is to produce the coordinator summary.]` +
@@ -1174,6 +1177,8 @@ export async function handleFeishuMessage(params: {
   // Resolve account with merged config
   const account = resolveFeishuAccount({ cfg, accountId });
   const feishuCfg = account.config;
+  const coordinatorAccountId = resolveCoordinatorFeishuAccountId(cfg);
+  const normalizedCoordinatorAccountId = normalizeAgentId(coordinatorAccountId);
 
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
@@ -1216,7 +1221,7 @@ export async function handleFeishuMessage(params: {
         botOpenIdMap: botOpenIds,
         botNameMap: botNames,
         accountAliasMap: configuredBotAliasMap,
-        mainAccountId: "main",
+        mainAccountId: coordinatorAccountId,
         activeThreadState: activeThreadIntent,
       });
     mentionedBotAccountIds = groupIntent.rawParticipants;
@@ -1239,6 +1244,7 @@ export async function handleFeishuMessage(params: {
           participants: effectiveGroupParticipants,
           maxHops: collaborationMaxHops,
           explicitMode: ctx.explicitGroupCoAddressMode,
+          coordinatorAccountId,
         });
       }
     }
@@ -1681,7 +1687,7 @@ export async function handleFeishuMessage(params: {
         permissionErrorForAgent,
         botOpenId,
         autoMentionTargets:
-          options?.autoMentionTargetsOverride ?? normalizedAgentId !== "main",
+          options?.autoMentionTargetsOverride ?? normalizedAgentId !== normalizedCoordinatorAccountId,
         agentId: normalizedAgentId,
       });
       const envelopeFrom = isGroup ? `${ctx.chatId}:${ctx.senderOpenId}` : ctx.senderOpenId;
@@ -1949,13 +1955,13 @@ export async function handleFeishuMessage(params: {
     const maybeDispatchDirectReplyParticipants = async () => {
       if (
         !isGroup ||
-        normalizeAgentId(route.agentId) !== "main" ||
+        normalizeAgentId(route.agentId) !== normalizedCoordinatorAccountId ||
         ctx.groupCoAddressMode !== "direct_reply"
       ) {
         return false;
       }
       const participants = (ctx.groupCoAddressParticipants ?? []).filter(
-        (participant) => normalizeAgentId(participant) !== "main",
+        (participant) => normalizeAgentId(participant) !== normalizedCoordinatorAccountId,
       );
       if (participants.length === 0) {
         return false;
@@ -2025,7 +2031,11 @@ export async function handleFeishuMessage(params: {
           );
         }
       }
-      return !((ctx.groupCoAddressParticipants ?? []).some((participant) => normalizeAgentId(participant) === "main"));
+      return !(
+        (ctx.groupCoAddressParticipants ?? []).some(
+          (participant) => normalizeAgentId(participant) === normalizedCoordinatorAccountId,
+        )
+      );
     };
 
     const maybeDispatchPendingHandoff = async (params: {
@@ -2293,7 +2303,9 @@ export async function handleFeishuMessage(params: {
             collaborationStateOverride: claim.state,
             autoMentionTargetsOverride: false,
             mentionTargetsOverride: undefined,
-            visibleMentionTargetsOverride: buildVisibleMentionTargetsForAgents(["main"]),
+            visibleMentionTargetsOverride: buildVisibleMentionTargetsForAgents([
+              claim.state.coordinatorAccountId,
+            ]),
             messageIdOverride: `${ctx.messageId}::coordinate::${claim.state.taskId}::${targetAgentId}`,
           },
         );
@@ -2308,7 +2320,9 @@ export async function handleFeishuMessage(params: {
           rootId: ctx.rootId,
           threadReply,
           mentionTargets: undefined,
-          visibleMentionTargets: buildVisibleMentionTargetsForAgents(["main"]),
+          visibleMentionTargets: buildVisibleMentionTargetsForAgents([
+            claim.state.coordinatorAccountId,
+          ]),
           collaborationTaskId: claim.state.taskId,
           accountId: targetAccountId,
           messageCreateTimeMs,
@@ -2372,11 +2386,13 @@ export async function handleFeishuMessage(params: {
         return;
       }
       const summaryVisibleMentionTargets = buildVisibleMentionTargetsForAgents(
-        claim.participants.filter((participant) => normalizeAgentId(participant) !== "main"),
+        claim.participants.filter(
+          (participant) => normalizeAgentId(participant) !== normalizedCoordinatorAccountId,
+        ),
       );
       const summarySessionKey = buildCollaborationSessionKey(
         core.channel.routing.buildAgentSessionKey({
-          agentId: "main",
+          agentId: claim.coordinatorAccountId,
           channel: "feishu",
           peer: {
             kind: isGroup ? "group" : "direct",
@@ -2387,9 +2403,9 @@ export async function handleFeishuMessage(params: {
       );
       const summaryCtxPayload = buildCtxPayloadForAgent(
         summarySessionKey,
-        "main",
+        claim.coordinatorAccountId,
         true,
-        "main",
+        claim.coordinatorAccountId,
         {
           collaborationStateOverride: claim,
           autoMentionTargetsOverride: false,
@@ -2400,7 +2416,7 @@ export async function handleFeishuMessage(params: {
       );
       const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
         cfg,
-        agentId: "main",
+        agentId: claim.coordinatorAccountId,
         runtime: runtime as RuntimeEnv,
         chatId: ctx.chatId,
         replyToMessageId: replyTargetMessageId,
@@ -2411,11 +2427,11 @@ export async function handleFeishuMessage(params: {
         mentionTargets: undefined,
         visibleMentionTargets: summaryVisibleMentionTargets,
         collaborationTaskId: claim.taskId,
-        accountId: "main",
+        accountId: claim.coordinatorAccountId,
         messageCreateTimeMs,
       });
       log(
-        `feishu[${account.accountId}]: coordinate summary dispatch -> main (session=${summarySessionKey})`,
+        `feishu[${account.accountId}]: coordinate summary dispatch -> ${claim.coordinatorAccountId} (session=${summarySessionKey})`,
       );
       await runCollaborationDispatchWithRetry({
         log: (message) => log(`feishu[${account.accountId}]: ${message}`),
@@ -2530,7 +2546,10 @@ export async function handleFeishuMessage(params: {
             replyInThread,
             rootId: ctx.rootId,
             threadReply,
-            mentionTargets: normalizeAgentId(agentId) === "main" ? undefined : ctx.mentionTargets,
+            mentionTargets:
+              normalizeAgentId(agentId) === normalizedCoordinatorAccountId
+                ? undefined
+                : ctx.mentionTargets,
             collaborationTaskId: collaborationState?.taskId,
             accountId: account.accountId,
             messageCreateTimeMs,
@@ -2616,7 +2635,7 @@ export async function handleFeishuMessage(params: {
       const normalizedRouteAgentId = normalizeAgentId(route.agentId);
       const peerCollabOrchestratedByMain =
         isGroup &&
-        normalizedRouteAgentId === normalizeAgentId(groupIntent?.rawEntryAccountId ?? "main") &&
+        normalizedRouteAgentId === normalizeAgentId(groupIntent?.rawEntryAccountId ?? coordinatorAccountId) &&
         collaborationState?.mode === "peer_collab" &&
         !groupIntent?.mainExplicitlyMentioned;
       if (peerCollabOrchestratedByMain) {
@@ -2635,10 +2654,11 @@ export async function handleFeishuMessage(params: {
         return;
       }
       const initialVisibleMentionTargets =
-        collaborationState?.mode === "coordinate" && normalizedRouteAgentId === "main"
+        collaborationState?.mode === "coordinate" &&
+        normalizedRouteAgentId === normalizedCoordinatorAccountId
           ? buildVisibleMentionTargetsForAgents(
               collaborationState.participants.filter(
-                (participant) => normalizeAgentId(participant) !== "main",
+                (participant) => normalizeAgentId(participant) !== normalizedCoordinatorAccountId,
               ),
             )
           : collaborationState?.mode === "peer_collab"
@@ -2670,7 +2690,10 @@ export async function handleFeishuMessage(params: {
         replyInThread,
         rootId: ctx.rootId,
         threadReply,
-        mentionTargets: normalizedRouteAgentId === "main" ? undefined : ctx.mentionTargets,
+        mentionTargets:
+          normalizedRouteAgentId === normalizedCoordinatorAccountId
+            ? undefined
+            : ctx.mentionTargets,
         visibleMentionTargets: initialVisibleMentionTargets,
         collaborationTaskId: collaborationState?.taskId,
         accountId: account.accountId,

@@ -697,6 +697,7 @@ describe("collaboration state", () => {
       mode: "coordinate",
       protocol: "runtime",
       phase: "active_collab",
+      coordinatorAccountId: "main",
       participants: ["main", "flink-sre"],
       currentOwner: "main",
       speakerToken: "main",

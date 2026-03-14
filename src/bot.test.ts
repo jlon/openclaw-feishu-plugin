@@ -355,6 +355,7 @@ describe("buildFeishuAgentBody", () => {
         groupCoAddressMode: "coordinate",
         collaboration: {
           taskId: "task_coordinate_owner",
+          coordinatorAccountId: "main",
           mode: "coordinate",
           phase: "active_collab",
           participants: ["main", "flink-sre", "starrocks-sre"],
@@ -387,6 +388,7 @@ describe("buildFeishuAgentBody", () => {
         groupCoAddressMode: "coordinate",
         collaboration: {
           taskId: "task_coordinate_specialist",
+          coordinatorAccountId: "main",
           mode: "coordinate",
           phase: "active_collab",
           participants: ["main", "flink-sre", "starrocks-sre"],
@@ -420,6 +422,7 @@ describe("buildFeishuAgentBody", () => {
         groupCoAddressMode: "coordinate",
         collaboration: {
           taskId: "task_coordinate_summary",
+          coordinatorAccountId: "main",
           mode: "coordinate",
           phase: "active_collab",
           participants: ["main", "flink-sre", "starrocks-sre"],
@@ -1389,6 +1392,144 @@ describe("handleFeishuMessage command authorization", () => {
     })?.ctx?.CollaborationTaskId;
     expect(summaryTaskId).toBeTruthy();
     expect(getCollaborationStateForTesting(summaryTaskId! as string)?.phase).toBe("completed");
+  });
+
+  it("uses the configured default account as the coordinate owner and summary dispatcher", async () => {
+    mockCreateFeishuReplyDispatcher.mockImplementation((params) => ({
+      dispatcher: {
+        markComplete: vi.fn(),
+        waitForIdle: vi.fn(async () => {}),
+      },
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      _params: params,
+    }));
+    botOpenIds.set("dispatcher", "ou_dispatcher");
+    botOpenIds.set("flink-sre", "ou_flink");
+    botOpenIds.set("starrocks-sre", "ou_starrocks");
+    botNames.set("dispatcher", "调度员");
+    botNames.set("flink-sre", "Flink-SRE");
+    botNames.set("starrocks-sre", "Starrocks-SRE");
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          enabled: true,
+          defaultAccount: "dispatcher",
+          accounts: {
+            dispatcher: {
+              enabled: true,
+              appId: "app_dispatcher",
+              appSecret: "secret_dispatcher",
+              groupPolicy: "open",
+              requireMention: false,
+              renderMode: "raw",
+              streaming: false,
+            },
+            "flink-sre": {
+              enabled: true,
+              appId: "app_flink",
+              appSecret: "secret_flink",
+              groupPolicy: "open",
+              requireMention: true,
+              renderMode: "raw",
+              streaming: false,
+            },
+            "starrocks-sre": {
+              enabled: true,
+              appId: "app_starrocks",
+              appSecret: "secret_starrocks",
+              groupPolicy: "open",
+              requireMention: true,
+              renderMode: "raw",
+              streaming: false,
+            },
+          },
+        },
+      },
+      agents: {
+        list: [{ id: "dispatcher" }, { id: "flink-sre" }, { id: "starrocks-sre" }],
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-user",
+        },
+      },
+      message: {
+        message_id: "msg-coordinate-default-account",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({
+          text: '<at user_id="ou_flink">Flink-SRE</at> <at user_id="ou_starrocks">Starrocks-SRE</at> 你俩先看，最后给我一个结论',
+        }),
+        mentions: [
+          { key: "@_user_1", name: "Flink-SRE", id: { open_id: "ou_flink" } },
+          { key: "@_user_2", name: "Starrocks-SRE", id: { open_id: "ou_starrocks" } },
+        ],
+      },
+    };
+
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "flink-sre",
+      channel: "feishu",
+      accountId: "flink-sre",
+      sessionKey: "agent:flink-sre:feishu:group:oc-group",
+      mainSessionKey: "agent:flink-sre:main",
+      matchedBy: "explicit",
+    });
+    mockDispatchReplyFromConfig.mockImplementation(async ({ ctx }: { ctx: Record<string, string> }) => {
+      if (ctx.AccountId === "flink-sre" || ctx.AccountId === "starrocks-sre") {
+        applyCollaborationActions([
+          {
+            action: "collab_report_complete",
+            taskId: ctx.CollaborationTaskId,
+            agentId: ctx.AccountId,
+          },
+        ]);
+      }
+      return { queuedFinal: false, counts: { final: 1 } };
+    });
+
+    await handleFeishuMessage({
+      cfg,
+      event,
+      accountId: "dispatcher",
+      botOpenId: "ou_dispatcher",
+      botName: "调度员",
+      runtime: createRuntimeEnv(),
+    });
+
+    const specialistCalls = mockDispatchReplyFromConfig.mock.calls
+      .slice(1, 3)
+      .map(([params]) => params.ctx)
+      .sort((a, b) => String(a.AccountId).localeCompare(String(b.AccountId)));
+
+    expect(specialistCalls).toEqual([
+      expect.objectContaining({
+        AccountId: "flink-sre",
+        CollaborationMode: "coordinate",
+        CollaborationCurrentOwner: "dispatcher",
+      }),
+      expect.objectContaining({
+        AccountId: "starrocks-sre",
+        CollaborationMode: "coordinate",
+        CollaborationCurrentOwner: "dispatcher",
+      }),
+    ]);
+
+    expect(mockDispatchReplyFromConfig.mock.calls[3]?.[0]).toEqual(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          AccountId: "dispatcher",
+          MessageSid: expect.stringContaining("::coordinate-summary::"),
+          CollaborationCurrentOwner: "dispatcher",
+        }),
+      }),
+    );
   });
 
   it("still dispatches a coordinator summary when one specialist stays silent", async () => {

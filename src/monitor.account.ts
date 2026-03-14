@@ -1,7 +1,7 @@
 import * as crypto from "crypto";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import type { ClawdbotConfig, RuntimeEnv, HistoryEntry } from "openclaw/plugin-sdk/feishu";
-import { resolveFeishuAccount } from "./accounts.js";
+import { resolveCoordinatorFeishuAccountId, resolveFeishuAccount } from "./accounts.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
 import {
   handleFeishuMessage,
@@ -36,8 +36,6 @@ import { getMessageFeishu } from "./send.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 const FEISHU_REACTION_VERIFY_TIMEOUT_MS = 1_500;
-const PRIMARY_FEISHU_ACCOUNT_ID = "main";
-
 function resolveEffectiveGroupIntentForEvent(params: {
   event: FeishuMessageEvent;
   cfg?: ClawdbotConfig;
@@ -50,6 +48,9 @@ function resolveEffectiveGroupIntentForEvent(params: {
   }
   const { botOpenIdMap = botOpenIds, botNameMap = botNames } = params;
   const accountAliasMap = params.accountAliasMap ?? buildConfiguredBotAliasMap(params.cfg);
+  const coordinatorAccountId = params.cfg
+    ? resolveCoordinatorFeishuAccountId(params.cfg)
+    : "main";
   const activeThreadState = getActiveCollaborationIntentForThread({
     chatId: params.event.message.chat_id,
     rootId: params.event.message.root_id,
@@ -60,7 +61,7 @@ function resolveEffectiveGroupIntentForEvent(params: {
     botOpenIdMap,
     botNameMap,
     accountAliasMap,
-    mainAccountId: PRIMARY_FEISHU_ACCOUNT_ID,
+    mainAccountId: coordinatorAccountId,
     activeThreadState,
   });
 }
@@ -302,6 +303,7 @@ export function shouldSkipDispatchForMentionPolicy(params: {
       botNameMap,
       accountAliasMap,
     });
+  const coordinatorAccountId = cfg ? resolveCoordinatorFeishuAccountId(cfg) : "main";
   const effectiveMentionedBotAccountIds = groupIntent.rawParticipants;
   const mentionedOpenIds = extractMentionedOpenIds(event);
   const currentMentionedByName = Boolean(
@@ -316,17 +318,17 @@ export function shouldSkipDispatchForMentionPolicy(params: {
   }
   const mainMentioned = groupIntent.mainMentioned;
   const specialistMentionCount = effectiveMentionedBotAccountIds.filter(
-    (id) => id !== PRIMARY_FEISHU_ACCOUNT_ID,
+    (id) => id !== coordinatorAccountId,
   ).length;
   const coAddressMode = groupIntent.mode;
   if (coAddressMode !== "none") {
-    return accountId !== (groupIntent.rawEntryAccountId ?? PRIMARY_FEISHU_ACCOUNT_ID);
+    return accountId !== (groupIntent.rawEntryAccountId ?? coordinatorAccountId);
   }
   const currentMentioned = Boolean(
     (currentBotOpenId?.trim() && mentionedOpenIds.includes(currentBotOpenId.trim())) ||
       currentMentionedByName,
   );
-  if (accountId === PRIMARY_FEISHU_ACCOUNT_ID) {
+  if (accountId === coordinatorAccountId) {
     if (mainMentioned) {
       return false;
     }
