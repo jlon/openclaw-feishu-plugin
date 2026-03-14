@@ -189,6 +189,10 @@ export function buildCollaborationThreadKey(params: {
   return `${params.chatId.trim()}:message:${params.messageId.trim()}`;
 }
 
+function buildMessageScopedThreadKey(chatId: string, messageId: string): string {
+  return `${chatId.trim()}:message:${messageId.trim()}`;
+}
+
 export function buildCollaborationTaskId(params: {
   chatId: string;
   rootId?: string;
@@ -363,8 +367,14 @@ export function ensureCollaborationState(params: {
     return nextState;
   }
   const existingThreadTaskId = collaborationTaskIdByThreadKey.get(threadKey);
-  if (existingThreadTaskId) {
-    const existingThreadState = collaborationStateByTaskId.get(existingThreadTaskId);
+  const scopedThreadId = params.rootId?.trim() || params.threadId?.trim();
+  const fallbackThreadTaskId =
+    scopedThreadId && !existingThreadTaskId
+      ? collaborationTaskIdByThreadKey.get(buildMessageScopedThreadKey(params.chatId, scopedThreadId))
+      : undefined;
+  const existingThreadLookupTaskId = existingThreadTaskId ?? fallbackThreadTaskId;
+  if (existingThreadLookupTaskId) {
+    const existingThreadState = collaborationStateByTaskId.get(existingThreadLookupTaskId);
     if (
       existingThreadState &&
       !isTerminalCollaborationPhase(existingThreadState.phase)
@@ -1312,7 +1322,9 @@ export function getActiveCollaborationStateForThread(params: {
     return undefined;
   }
   const threadKey = `${params.chatId.trim()}:thread:${scopedThreadId}`;
-  const taskId = collaborationTaskIdByThreadKey.get(threadKey);
+  const taskId =
+    collaborationTaskIdByThreadKey.get(threadKey) ??
+    collaborationTaskIdByThreadKey.get(buildMessageScopedThreadKey(params.chatId, scopedThreadId));
   if (!taskId) {
     return undefined;
   }

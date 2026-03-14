@@ -8,6 +8,7 @@ import {
   clearCollaborationStateForTesting,
   completeCoordinateSummary,
   ensureCollaborationState,
+  getActiveCollaborationStateForThread,
   getCollaborationStateForTesting,
   getCollaborationStateStatsForTesting,
   markCoordinateParticipantCompleted,
@@ -104,6 +105,58 @@ describe("collaboration state", () => {
       maxHops: 3,
     });
     expect(second.taskId).toBe(first.taskId);
+  });
+
+  it("reuses the first-turn task when a follow-up thread reply points back to the original message id", () => {
+    const first = resolveCollaborationStateForMessage({
+      event: {
+        message: {
+          chat_id: "oc_group_thread_resume",
+          message_id: "om_user_msg_first",
+        },
+      } as any,
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre"],
+      maxHops: 3,
+    });
+
+    const second = resolveCollaborationStateForMessage({
+      event: {
+        message: {
+          chat_id: "oc_group_thread_resume",
+          root_id: "om_user_msg_first",
+          thread_id: "omt_thread_resume",
+          message_id: "om_user_msg_follow",
+        },
+      } as any,
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre"],
+      maxHops: 3,
+    });
+
+    expect(second.taskId).toBe(first.taskId);
+  });
+
+  it("finds an active thread task when the first turn was keyed only by message id", () => {
+    const first = resolveCollaborationStateForMessage({
+      event: {
+        message: {
+          chat_id: "oc_group_thread_lookup",
+          message_id: "om_user_msg_first",
+        },
+      } as any,
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre"],
+      maxHops: 3,
+    });
+
+    const active = getActiveCollaborationStateForThread({
+      chatId: "oc_group_thread_lookup",
+      rootId: "om_user_msg_first",
+      threadId: "omt_thread_lookup",
+    });
+
+    expect(active?.taskId).toBe(first.taskId);
   });
 
   it("creates a fresh task for a follow-up in the same thread after the previous task is completed", () => {

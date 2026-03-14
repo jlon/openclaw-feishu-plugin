@@ -25,6 +25,9 @@ type Args = {
   deliverAccounts: string[];
   dryRun: boolean;
   dumpDispatchPath?: string;
+  messageId?: string;
+  rootId?: string;
+  threadId?: string;
 };
 
 const parseArgs = (argv: string[]): Args => {
@@ -45,6 +48,9 @@ const parseArgs = (argv: string[]): Args => {
     deliverAccounts: [],
     dryRun: false,
     dumpDispatchPath: process.env.OPENCLAW_FEISHU_E2E_DUMP_DISPATCH,
+    messageId: process.env.OPENCLAW_FEISHU_E2E_MESSAGE_ID,
+    rootId: process.env.OPENCLAW_FEISHU_E2E_ROOT_ID,
+    threadId: process.env.OPENCLAW_FEISHU_E2E_THREAD_ID,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -56,6 +62,9 @@ const parseArgs = (argv: string[]): Args => {
     else if (arg === "--mentions") parsed.mentions = nextValue(i++, arg).split(",").map((v) => v.trim()).filter(Boolean);
     else if (arg === "--deliver-accounts") parsed.deliverAccounts = nextValue(i++, arg).split(",").map((v) => v.trim()).filter(Boolean);
     else if (arg === "--dump-dispatch") parsed.dumpDispatchPath = nextValue(i++, arg);
+    else if (arg === "--message-id") parsed.messageId = nextValue(i++, arg);
+    else if (arg === "--root-id") parsed.rootId = nextValue(i++, arg);
+    else if (arg === "--thread-id") parsed.threadId = nextValue(i++, arg);
     else if (arg === "--dry-run") parsed.dryRun = true;
     else throw new Error(`unknown arg: ${arg}`);
   }
@@ -229,13 +238,15 @@ const main = async () => {
       name: identity.name,
     };
   });
-  const messageId = `synthetic_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  const messageId = args.messageId || `synthetic_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   const event = buildSyntheticGroupMessageEvent({
     messageId,
     groupId: args.groupId,
     senderOpenId: args.senderOpenId,
     text: args.text,
     mentions,
+    rootId: args.rootId,
+    threadId: args.threadId,
   });
   const filteredDeliverAccounts = filterSyntheticDispatchAccountIds({
     event,

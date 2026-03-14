@@ -88,6 +88,8 @@ export function buildSyntheticGroupMessageEvent(params: {
   senderOpenId: string;
   text: string;
   mentions?: SyntheticMention[];
+  rootId?: string;
+  threadId?: string;
 }): FeishuMessageEvent {
   const mentions = params.mentions ?? [];
   let inlineMentionMatched = false;
@@ -125,6 +127,8 @@ export function buildSyntheticGroupMessageEvent(params: {
         name: mention.name,
         tenant_key: "",
       })),
+      ...(params.rootId ? { root_id: params.rootId } : {}),
+      ...(params.threadId ? { thread_id: params.threadId } : {}),
       create_time: `${Date.now()}`,
     },
   };

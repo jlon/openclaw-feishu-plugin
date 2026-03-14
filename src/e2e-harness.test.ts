@@ -63,6 +63,20 @@ describe("e2e harness helpers", () => {
     expect(parsed.text).not.toContain("<at user_id=");
   });
 
+  it("preserves root and thread identifiers when provided", () => {
+    const event = buildSyntheticGroupMessageEvent({
+      messageId: "msg-e2e-thread",
+      groupId: "oc-test-group",
+      senderOpenId: "ou-user",
+      text: "继续讨论",
+      rootId: "om_root_001",
+      threadId: "omt_thread_001",
+    });
+
+    expect(event.message.root_id).toBe("om_root_001");
+    expect(event.message.thread_id).toBe("omt_thread_001");
+  });
+
   it("matches inline mentions case-insensitively against account ids", () => {
     const event = buildSyntheticGroupMessageEvent({
       messageId: "msg-e2e-3",
