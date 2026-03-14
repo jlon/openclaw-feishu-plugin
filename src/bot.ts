@@ -51,6 +51,7 @@ import {
   completeCoordinateSummary,
   getCollaborationState,
   getActiveCollaborationIntentForThread,
+  markCoordinateParticipantFailed,
   resolveCollaborationStateForMessage,
   resolveNextPeerAutoSpeaker,
   type CollaborationRuntimeContext,
@@ -1021,12 +1022,17 @@ export function buildFeishuAgentBody(params: {
       if (collaboration.isCurrentOwner) {
         const canHandoff = collaboration.allowedActions.includes("agent_handoff");
         if (collaboration.mode === "coordinate" && agentId === "main") {
-          if (collaboration.coordinateSummaryPending) {
-            messageBody +=
-              `\n[System: All specialists have replied. Your job now is to produce the coordinator summary.]` +
+        if (collaboration.coordinateSummaryPending) {
+          messageBody +=
+              `\n[System: All responding specialists have settled. Your job now is to produce the coordinator summary.]` +
               `\n[System: Synthesize the latest specialist findings into one concise conclusion and, if helpful, one next step.]` +
               `\n[System: Do not assign more participants, do not append hidden control blocks, and keep the visible reply to one or two short sentences.]`;
-          } else {
+          if ((collaboration.coordinateFailedAgents?.length ?? 0) > 0) {
+            messageBody +=
+              `\n[System: The following specialists did not respond in time: ${collaboration.coordinateFailedAgents?.join(", ")}.]` +
+              `\n[System: Mention the missing side only if it matters to the conclusion.]`;
+          }
+        } else {
             messageBody +=
               `\n[System: You are coordinating this task. Your visible reply should acknowledge the request, assign the relevant participants in parallel, and set the expected output.]` +
               `\n[System: In this first coordinator turn, do not append an agent_handoff control block. The mentioned specialists will be dispatched automatically.]` +
@@ -1738,6 +1744,8 @@ export async function handleFeishuMessage(params: {
         CollaborationOwnLastVisibleTurn: collaborationOwnLastVisibleTurn,
         CollaborationCoordinateCompletedAgents:
           collaboration?.coordinateCompletedAgents?.join(",") || undefined,
+        CollaborationCoordinateFailedAgents:
+          collaboration?.coordinateFailedAgents?.join(",") || undefined,
         CollaborationCoordinateSummaryPending: collaboration?.coordinateSummaryPending
           ? "true"
           : undefined,
@@ -2284,23 +2292,42 @@ export async function handleFeishuMessage(params: {
         log(
           `feishu[${account.accountId}]: coordinate participant dispatch -> ${targetAgentId} (session=${targetSessionKey})`,
         );
-        await runCollaborationDispatchWithRetry({
-          log: (message) => log(`feishu[${account.accountId}]: ${message}`),
-          run: () =>
-            core.channel.reply.withReplyDispatcher({
-              dispatcher,
-              onSettled: () => {
-                markDispatchIdle();
-              },
-              run: () =>
-                core.channel.reply.dispatchReplyFromConfig({
-                  ctx: targetCtxPayload,
-                  cfg,
-                  dispatcher,
-                  replyOptions,
-                }),
-            }),
-        });
+        try {
+          const dispatchResult = await runCollaborationDispatchWithRetry({
+            log: (message) => log(`feishu[${account.accountId}]: ${message}`),
+            run: () =>
+              core.channel.reply.withReplyDispatcher({
+                dispatcher,
+                onSettled: () => {
+                  markDispatchIdle();
+                },
+                run: () =>
+                  core.channel.reply.dispatchReplyFromConfig({
+                    ctx: targetCtxPayload,
+                    cfg,
+                    dispatcher,
+                    replyOptions,
+                  }),
+              }),
+          });
+          const finalReplyCount =
+            typeof dispatchResult === "object" &&
+            dispatchResult !== null &&
+            "counts" in dispatchResult &&
+            typeof (dispatchResult as { counts?: { final?: unknown } }).counts?.final === "number"
+              ? ((dispatchResult as { counts?: { final?: number } }).counts?.final ?? 0)
+              : 0;
+          const latestState = getCollaborationState(claim.state.taskId);
+          const targetSettled =
+            latestState?.coordinateCompletedAgents.includes(targetAgentId) ||
+            latestState?.coordinateFailedAgents.includes(targetAgentId);
+          if (!targetSettled && finalReplyCount === 0) {
+            markCoordinateParticipantFailed(claim.state.taskId, targetAgentId);
+          }
+        } catch (error) {
+          markCoordinateParticipantFailed(claim.state.taskId, targetAgentId);
+          throw error;
+        }
       };
       const results = await Promise.allSettled(claim.targets.map(dispatchTarget));
       for (let i = 0; i < results.length; i++) {

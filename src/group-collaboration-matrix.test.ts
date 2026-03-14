@@ -405,6 +405,35 @@ describe("group collaboration matrix", () => {
     );
   });
 
+  it("8e. plain non-follow-up text does not resume active thread collaboration", () => {
+    const event = makeEvent({
+      text: "收到",
+      rootId: "om_thread_plain_root",
+      threadId: "om_thread_plain_root",
+      messageId: "msg_thread_plain_followup",
+    });
+    const intent = resolveGroupIntentForEventWithActiveThread({
+      event: event as any,
+      botOpenIdMap: new Map([
+        ["main", "ou_main"],
+        ["flink-sre", "ou_flink"],
+        ["starrocks-sre", "ou_sr"],
+      ]),
+      mainAccountId: "main",
+      activeThreadState: {
+        mode: "peer_collab",
+        participants: ["flink-sre", "starrocks-sre"],
+      },
+    });
+    expect(intent).toEqual(
+      expect.objectContaining({
+        mode: "none",
+        participants: [],
+        rawParticipants: [],
+      }),
+    );
+  });
+
   it("10. implicit discussion defaults to peer_collab without explicit collaboration mode", () => {
     const event = makeEvent({
       text: "@Flink-SRE @Starrocks-SRE 你俩先判断，再继续往下聊，最后形成一句话结论",

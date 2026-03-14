@@ -421,7 +421,7 @@ describe("buildFeishuAgentBody", () => {
       agentId: "main",
     });
 
-    expect(body).toContain("All specialists have replied. Your job now is to produce the coordinator summary.");
+    expect(body).toContain("All responding specialists have settled. Your job now is to produce the coordinator summary.");
     expect(body).toContain("Do not assign more participants");
     expect(body).not.toContain("do not append an agent_handoff control block. The mentioned specialists will be dispatched automatically.");
   });
@@ -1371,6 +1371,134 @@ describe("handleFeishuMessage command authorization", () => {
     })?.ctx?.CollaborationTaskId;
     expect(summaryTaskId).toBeTruthy();
     expect(getCollaborationStateForTesting(summaryTaskId! as string)?.phase).toBe("completed");
+  });
+
+  it("still dispatches a coordinator summary when one specialist stays silent", async () => {
+    mockCreateFeishuReplyDispatcher.mockImplementation((params) => ({
+      dispatcher: {
+        markComplete: vi.fn(),
+        waitForIdle: vi.fn(async () => {}),
+      },
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      _params: params,
+    }));
+    botOpenIds.set("main", "ou_main");
+    botOpenIds.set("flink-sre", "ou_flink");
+    botOpenIds.set("starrocks-sre", "ou_starrocks");
+    botNames.set("main", "首席大管家");
+    botNames.set("flink-sre", "Flink-SRE");
+    botNames.set("starrocks-sre", "Starrocks-SRE");
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          enabled: true,
+          defaultAccount: "main",
+          accounts: {
+            main: {
+              enabled: true,
+              appId: "app_main",
+              appSecret: "secret_main",
+              groupPolicy: "open",
+              requireMention: false,
+              renderMode: "raw",
+              streaming: false,
+            },
+            "flink-sre": {
+              enabled: true,
+              appId: "app_flink",
+              appSecret: "secret_flink",
+              groupPolicy: "open",
+              requireMention: true,
+              renderMode: "raw",
+              streaming: false,
+            },
+            "starrocks-sre": {
+              enabled: true,
+              appId: "app_starrocks",
+              appSecret: "secret_starrocks",
+              groupPolicy: "open",
+              requireMention: true,
+              renderMode: "raw",
+              streaming: false,
+            },
+          },
+        },
+      },
+      agents: {
+        list: [{ id: "main" }, { id: "flink-sre" }, { id: "starrocks-sre" }],
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-user",
+        },
+      },
+      message: {
+        message_id: "msg-coordinate-silent-specialist",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({
+          text: '<at user_id="ou_main">首席大管家</at> <at user_id="ou_flink">Flink-SRE</at> <at user_id="ou_starrocks">Starrocks-SRE</at> 帮我安排并汇总这次排查',
+        }),
+        mentions: [
+          { key: "@_user_1", name: "首席大管家", id: { open_id: "ou_main" } },
+          { key: "@_user_2", name: "Flink-SRE", id: { open_id: "ou_flink" } },
+          { key: "@_user_3", name: "Starrocks-SRE", id: { open_id: "ou_starrocks" } },
+        ],
+      },
+    };
+
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "main",
+      channel: "feishu",
+      accountId: "main",
+      sessionKey: "agent:main:feishu:group:oc-group",
+      mainSessionKey: "agent:main:main",
+      matchedBy: "explicit",
+    });
+    mockDispatchReplyFromConfig.mockImplementation(async ({ ctx }: { ctx: Record<string, string> }) => {
+      if (ctx.AccountId === "flink-sre") {
+        applyCollaborationActions([
+          {
+            action: "collab_report_complete",
+            taskId: ctx.CollaborationTaskId,
+            agentId: ctx.AccountId,
+          },
+        ]);
+        return { queuedFinal: false, counts: { final: 1 } };
+      }
+      if (ctx.AccountId === "starrocks-sre") {
+        return { queuedFinal: false, counts: { final: 0 } };
+      }
+      return { queuedFinal: false, counts: { final: 1 } };
+    });
+
+    await handleFeishuMessage({
+      cfg,
+      event,
+      accountId: "main",
+      botOpenId: "ou_main",
+      botName: "首席大管家",
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(4);
+    const summaryTaskId = (mockDispatchReplyFromConfig.mock.calls[3]?.[0] as {
+      ctx?: Record<string, string>;
+    })?.ctx?.CollaborationTaskId;
+    expect(summaryTaskId).toBeTruthy();
+    expect(getCollaborationStateForTesting(summaryTaskId! as string)).toEqual(
+      expect.objectContaining({
+        phase: "completed",
+        coordinateCompletedAgents: ["flink-sre"],
+        coordinateFailedAgents: ["starrocks-sre"],
+      }),
+    );
   });
 
   it("overrides upstream routing so natural multi-bot direct replies still enter through hidden main", async () => {

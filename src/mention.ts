@@ -69,6 +69,9 @@ const GROUP_DIRECT_REPLY_PATTERNS = [
 const GROUP_CONTINUATION_PATTERNS = [
   /继续/u,
   /再.+(讨论|往下|补充|聊|辩论)/u,
+  /另外还有/u,
+  /还有(一个|一点|个|些)?(现象|问题|情况|事实|补充|信息|线索|点)/u,
+  /再看(一下)?/u,
   /互相补充/u,
   /补充/u,
   /讨论/u,
@@ -347,6 +350,12 @@ export function resolveGroupCoAddressIntent(params: {
     activeThreadParticipants,
   } = params;
   const eventText = extractEventText(event);
+  const explicitMode = extractExplicitGroupCoAddressMode(eventText);
+  const shouldResumeActiveThread =
+    Boolean(explicitMode) ||
+    isGroupContinuationRequest(event) ||
+    isGroupCoordinationRequest(event) ||
+    isGroupDirectReplyRequest(event);
   const explicitParticipants = resolveExplicitGroupCoAddressParticipants({
     text: eventText,
     knownAccountIds,
@@ -355,14 +364,12 @@ export function resolveGroupCoAddressIntent(params: {
   let rawParticipants = normalizeParticipants(
     explicitParticipants.length > 0 ? explicitParticipants : [...mentionedBotAccountIds],
   );
-  const explicitMode = extractExplicitGroupCoAddressMode(eventText);
   if (
     rawParticipants.length === 0 &&
-    !explicitMode &&
     activeThreadMode &&
     activeThreadParticipants &&
     activeThreadParticipants.length > 0 &&
-    eventText.trim().length > 0
+    shouldResumeActiveThread
   ) {
     rawParticipants = normalizeParticipants([mainAccountId, ...activeThreadParticipants]);
   }
@@ -373,12 +380,11 @@ export function resolveGroupCoAddressIntent(params: {
   });
   if (
     mode === "none" &&
-    !explicitMode &&
     rawParticipants.length === 0 &&
     activeThreadMode &&
     activeThreadParticipants &&
     activeThreadParticipants.length > 0 &&
-    eventText.trim().length > 0
+    shouldResumeActiveThread
   ) {
     mode = activeThreadMode;
     rawParticipants = normalizeParticipants([mainAccountId, ...activeThreadParticipants]);

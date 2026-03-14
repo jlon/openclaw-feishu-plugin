@@ -114,6 +114,7 @@ export type CollaborationState = {
   peerAssessmentDispatchedAgents: string[];
   coordinateDispatchedAgents: string[];
   coordinateCompletedAgents: string[];
+  coordinateFailedAgents: string[];
   coordinateSummaryPending: boolean;
   coordinateSummaryDispatchKey?: string;
   assessments: Record<string, CollaborationAssessment>;
@@ -143,6 +144,7 @@ export type CollaborationRuntimeContext = {
   activeHandoff?: CollaborationActiveHandoffState;
   recentVisibleTurns: CollaborationVisibleTurn[];
   coordinateCompletedAgents?: string[];
+  coordinateFailedAgents?: string[];
   coordinateSummaryPending?: boolean;
   allowedActions: CollaborationAllowedAction[];
 };
@@ -268,6 +270,27 @@ function filterTurnsForParticipants(
   return turns.filter((turn) => allowed.has(turn.agentId));
 }
 
+function getCoordinateSpecialistParticipants(state: CollaborationState): string[] {
+  return state.participants.filter((participant) => participant !== "main");
+}
+
+function isCoordinateParticipantSettled(state: CollaborationState, agentId: string): boolean {
+  return (
+    state.coordinateCompletedAgents.includes(agentId) || state.coordinateFailedAgents.includes(agentId)
+  );
+}
+
+function isCoordinateSummaryReady(
+  state: CollaborationState,
+  completedAgents: readonly string[],
+  failedAgents: readonly string[],
+): boolean {
+  const settledParticipants = new Set([...completedAgents, ...failedAgents]);
+  return getCoordinateSpecialistParticipants(state).every((participant) =>
+    settledParticipants.has(participant),
+  );
+}
+
 function migrateActiveThreadState(params: {
   state: CollaborationState;
   nextStateKey: string;
@@ -304,6 +327,7 @@ function migrateActiveThreadState(params: {
     peerAssessmentDispatchedAgents: [],
     coordinateDispatchedAgents: [],
     coordinateCompletedAgents: [],
+    coordinateFailedAgents: [],
     coordinateSummaryPending: false,
     coordinateSummaryDispatchKey: undefined,
     assessments: {},
@@ -400,6 +424,7 @@ export function ensureCollaborationState(params: {
     peerAssessmentDispatchedAgents: [],
     coordinateDispatchedAgents: [],
     coordinateCompletedAgents: [],
+    coordinateFailedAgents: [],
     coordinateSummaryPending: false,
     assessments: {},
     recentVisibleTurns: [],
@@ -952,6 +977,8 @@ export function applyCollaborationActions(actions: CollaborationControlAction[])
             action.completionStatus === "complete" ? false : state.coordinateSummaryPending,
           coordinateSummaryDispatchKey:
             action.completionStatus === "complete" ? undefined : state.coordinateSummaryDispatchKey,
+          coordinateFailedAgents:
+            action.completionStatus === "complete" ? [] : state.coordinateFailedAgents,
           activeHandoffState: undefined,
         }),
       );
@@ -1076,6 +1103,8 @@ export function buildCollaborationRuntimeContext(params: {
     recentVisibleTurns: params.state.recentVisibleTurns,
     coordinateCompletedAgents:
       params.state.mode === "coordinate" ? params.state.coordinateCompletedAgents : undefined,
+    coordinateFailedAgents:
+      params.state.mode === "coordinate" ? params.state.coordinateFailedAgents : undefined,
     coordinateSummaryPending:
       params.state.mode === "coordinate" ? params.state.coordinateSummaryPending : undefined,
     allowedActions,
@@ -1097,13 +1126,40 @@ export function markCoordinateParticipantCompleted(
     return state;
   }
   const nextCompletedAgents = normalizeParticipants([...state.coordinateCompletedAgents, agentId]);
-  const specialistParticipants = state.participants.filter((participant) => participant !== "main");
-  const coordinateSummaryPending = specialistParticipants.every((participant) =>
-    nextCompletedAgents.includes(participant),
-  );
+  const nextFailedAgents = state.coordinateFailedAgents.filter((participant) => participant !== agentId);
+  const coordinateSummaryPending = isCoordinateSummaryReady(state, nextCompletedAgents, nextFailedAgents);
   return replaceState({
     ...state,
     coordinateCompletedAgents: nextCompletedAgents,
+    coordinateFailedAgents: nextFailedAgents,
+    coordinateSummaryPending,
+  });
+}
+
+export function markCoordinateParticipantFailed(
+  taskId: string,
+  agentId: string,
+): CollaborationState | undefined {
+  sweepExpiredCollaborationStates();
+  const state = collaborationStateByTaskId.get(taskId);
+  if (
+    !state ||
+    state.mode !== "coordinate" ||
+    agentId === "main" ||
+    !state.participants.includes(agentId) ||
+    state.coordinateCompletedAgents.includes(agentId)
+  ) {
+    return state;
+  }
+  const nextFailedAgents = normalizeParticipants([...state.coordinateFailedAgents, agentId]);
+  const coordinateSummaryPending = isCoordinateSummaryReady(
+    state,
+    state.coordinateCompletedAgents,
+    nextFailedAgents,
+  );
+  return replaceState({
+    ...state,
+    coordinateFailedAgents: nextFailedAgents,
     coordinateSummaryPending,
   });
 }
@@ -1170,7 +1226,9 @@ export function claimPendingCoordinateParticipants(taskId: string): {
   }
   const targets = state.participants.filter(
     (agentId) =>
-      agentId !== state.currentOwner && !state.coordinateDispatchedAgents.includes(agentId),
+      agentId !== state.currentOwner &&
+      !state.coordinateDispatchedAgents.includes(agentId) &&
+      !isCoordinateParticipantSettled(state, agentId),
   );
   if (targets.length === 0) {
     return {

@@ -10,6 +10,8 @@ import {
   ensureCollaborationState,
   getCollaborationStateForTesting,
   getCollaborationStateStatsForTesting,
+  markCoordinateParticipantCompleted,
+  markCoordinateParticipantFailed,
   parseCollaborationControlBlocks,
   recordCollaborationVisibleTurn,
   resolveNextPeerAutoSpeaker,
@@ -652,6 +654,7 @@ describe("collaboration state", () => {
       activeHandoff: undefined,
       recentVisibleTurns: [],
       coordinateCompletedAgents: [],
+      coordinateFailedAgents: [],
       coordinateSummaryPending: false,
       allowedActions: ["agent_handoff", "agent_handoff_complete"],
     });
@@ -767,6 +770,22 @@ describe("collaboration state", () => {
     const completedState = completeCoordinateSummary(state.taskId);
     expect(completedState?.phase).toBe("completed");
     expect(completedState?.coordinateSummaryPending).toBe(false);
+  });
+
+  it("treats failed coordinate participants as settled for summary readiness", () => {
+    const state = ensureCollaborationState({
+      chatId: "oc_group_coordinate_failed",
+      messageId: "msg_coordinate_failed",
+      mode: "coordinate",
+      participants: ["main", "flink-sre", "starrocks-sre"],
+      maxHops: 3,
+    });
+    markCoordinateParticipantCompleted(state.taskId, "flink-sre");
+    expect(claimCoordinateSummaryDispatch(state.taskId)).toBeUndefined();
+    markCoordinateParticipantFailed(state.taskId, "starrocks-sre");
+    const summaryState = claimCoordinateSummaryDispatch(state.taskId);
+    expect(summaryState?.coordinateSummaryPending).toBe(true);
+    expect(summaryState?.coordinateFailedAgents).toEqual(["starrocks-sre"]);
   });
 
   it("increments handoff count after a successful accept", () => {
