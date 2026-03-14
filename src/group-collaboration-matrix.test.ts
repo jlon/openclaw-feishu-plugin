@@ -233,6 +233,36 @@ describe("group collaboration matrix", () => {
     ).toBe(true);
   });
 
+  it("8b. main plus one specialist discussion stays in peer_collab and keeps main as a participant", () => {
+    const event = makeEvent({
+      text: "@首席大管家 @SoulCoder 你俩觉得明天会有太阳吗。为什么？可以互相讨论下",
+      mentions: [
+        { openId: "ou_main", name: "首席大管家", key: "@_user_1" },
+        { openId: "ou_coder", name: "SoulCoder", key: "@_user_2" },
+      ],
+    });
+    const intent = resolveGroupIntentForEventWithActiveThread({
+      event: event as any,
+      botOpenIdMap: new Map([
+        ["main", "ou_main"],
+        ["coder", "ou_coder"],
+      ]),
+      botNameMap: new Map([
+        ["main", "首席大管家"],
+        ["coder", "SoulCoder"],
+      ]),
+      mainAccountId: "main",
+    });
+    expect(intent).toEqual(
+      expect.objectContaining({
+        mode: "peer_collab",
+        mainMentioned: true,
+        mainExplicitlyMentioned: true,
+        participants: ["main", "coder"],
+      }),
+    );
+  });
+
   it("8a. multi-bot requests that ask for a final answer route to coordinate even without @main", () => {
     setFeishuBotOpenIdForTesting("main", "ou_main");
     setFeishuBotOpenIdForTesting("flink-sre", "ou_flink");

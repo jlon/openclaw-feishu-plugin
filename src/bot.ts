@@ -2618,7 +2618,7 @@ export async function handleFeishuMessage(params: {
         isGroup &&
         normalizedRouteAgentId === normalizeAgentId(groupIntent?.rawEntryAccountId ?? "main") &&
         collaborationState?.mode === "peer_collab" &&
-        !collaborationState.participants.includes("main");
+        !groupIntent?.mainExplicitlyMentioned;
       if (peerCollabOrchestratedByMain) {
         const previousCollaborationPhase = collaborationState?.phase;
         const previousCollaborationOwner = collaborationState?.currentOwner;

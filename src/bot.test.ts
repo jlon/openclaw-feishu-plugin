@@ -1859,7 +1859,7 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
-  it("keeps main out of peer_collab participants even when the user also mentions main", async () => {
+  it("keeps explicitly mentioned main inside peer_collab participants", async () => {
     botOpenIds.set("main", "ou_main");
     botOpenIds.set("flink-sre", "ou_flink");
     botOpenIds.set("starrocks-sre", "ou_starrocks");
@@ -1955,9 +1955,10 @@ describe("handleFeishuMessage command authorization", () => {
       .map(([params]) => params.ctx as Record<string, string>)
       .filter((ctx) => ctx.CollaborationMode === "peer_collab");
     expect(collaborationCalls.length).toBeGreaterThanOrEqual(2);
+    expect(collaborationCalls.some((ctx) => ctx.AccountId === "main")).toBe(true);
+    expect(collaborationCalls.some((ctx) => ctx.AccountId === "flink-sre")).toBe(true);
     for (const call of collaborationCalls) {
-      expect(call.CollaborationParticipants).toBe("flink-sre,starrocks-sre");
-      expect(call.AccountId).not.toBe("main");
+      expect(call.CollaborationParticipants).toBe("main,flink-sre,starrocks-sre");
     }
   });
 

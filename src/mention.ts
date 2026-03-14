@@ -24,6 +24,7 @@ export type GroupCoAddressIntent = {
   participants: string[];
   rawParticipants: string[];
   mainMentioned: boolean;
+  mainExplicitlyMentioned: boolean;
   rawEntryAccountId?: string;
 };
 
@@ -434,6 +435,8 @@ export function resolveGroupCoAddressIntent(params: {
     knownAccountIds,
     botNameMap,
   });
+  const mainExplicitlyMentioned =
+    explicitParticipants.includes(mainAccountId) || mentionedBotAccountIds.includes(mainAccountId);
   let rawParticipants = normalizeParticipants(
     explicitParticipants.length > 0 ? explicitParticipants : [...mentionedBotAccountIds],
   );
@@ -449,7 +452,7 @@ export function resolveGroupCoAddressIntent(params: {
   let mode = classifyGroupCoAddressMode({
     event,
     mentionedBotCount: rawParticipants.length,
-    mainMentioned: rawParticipants.includes(mainAccountId) || explicitMode === "coordinate",
+    mainMentioned: mainExplicitlyMentioned || explicitMode === "coordinate",
   });
   if (
     mode === "none" &&
@@ -462,10 +465,12 @@ export function resolveGroupCoAddressIntent(params: {
     mode = activeThreadMode;
     rawParticipants = normalizeParticipants([mainAccountId, ...activeThreadParticipants]);
   }
-  const mainMentioned = rawParticipants.includes(mainAccountId) || mode === "coordinate";
+  const mainMentioned = mainExplicitlyMentioned || mode === "coordinate";
   let participants =
     mode === "peer_collab"
-      ? rawParticipants.filter((participant) => participant !== mainAccountId)
+      ? mainExplicitlyMentioned
+        ? rawParticipants
+        : rawParticipants.filter((participant) => participant !== mainAccountId)
       : rawParticipants;
   if (mode === "peer_collab" && participants.length < 2) {
     mode = "direct_reply";
@@ -476,6 +481,7 @@ export function resolveGroupCoAddressIntent(params: {
     participants,
     rawParticipants,
     mainMentioned,
+    mainExplicitlyMentioned,
     rawEntryAccountId: mode === "none" ? undefined : mainAccountId,
   };
 }
