@@ -2620,11 +2620,14 @@ export async function handleFeishuMessage(params: {
         collaborationState?.mode === "peer_collab" &&
         !collaborationState.participants.includes("main");
       if (peerCollabOrchestratedByMain) {
+        const previousCollaborationPhase = collaborationState?.phase;
+        const previousCollaborationOwner = collaborationState?.currentOwner;
+        const previousCollaborationSpeakerToken = collaborationState?.speakerToken;
         await maybeDispatchPeerAssessmentParticipants({});
         await maybeDispatchCurrentOwnerFollowup({
-          previousPhase: collaborationState?.phase,
-          previousOwner: collaborationState?.currentOwner,
-          previousSpeakerToken: collaborationState?.speakerToken,
+          previousPhase: previousCollaborationPhase,
+          previousOwner: previousCollaborationOwner,
+          previousSpeakerToken: previousCollaborationSpeakerToken,
         });
         return;
       }
