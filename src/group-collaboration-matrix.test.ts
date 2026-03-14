@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { buildFeishuAgentBody, parseFeishuMessageEvent } from "./bot.js";
+import { resolveCollaborationStateForMessage } from "./collaboration.js";
 import {
   classifyGroupCoAddressMode,
   resolveExplicitGroupCoAddressParticipants,
@@ -15,6 +16,9 @@ function makeEvent(params: {
   chatType?: "group" | "p2p" | "private";
   text: string;
   mentions?: Array<{ openId?: string; name: string; key: string }>;
+  rootId?: string;
+  threadId?: string;
+  messageId?: string;
 }) {
   return {
     sender: {
@@ -24,9 +28,11 @@ function makeEvent(params: {
       },
     },
     message: {
-      message_id: "msg_1",
+      message_id: params.messageId ?? "msg_1",
       chat_id: "oc_group_1",
       chat_type: params.chatType ?? "group",
+      root_id: params.rootId,
+      thread_id: params.threadId,
       message_type: "text",
       content: JSON.stringify({ text: params.text }),
       mentions: (params.mentions ?? []).map((mention) => ({
@@ -257,6 +263,54 @@ describe("group collaboration matrix", () => {
         accountId: "starrocks-sre",
         currentBotOpenId: "ou_sr",
         event: event as any,
+      }),
+    ).toBe(true);
+  });
+
+  it("8b. thread follow-up without re-mention resumes active peer collaboration via hidden main entry", () => {
+    setFeishuBotOpenIdForTesting("main", "ou_main");
+    setFeishuBotOpenIdForTesting("flink-sre", "ou_flink");
+    setFeishuBotOpenIdForTesting("starrocks-sre", "ou_sr");
+    resolveCollaborationStateForMessage({
+      event: makeEvent({
+        messageId: "msg_thread_start",
+        rootId: "om_root_resume",
+        threadId: "omt_resume",
+        text: "@Flink-SRE @Starrocks-SRE 你俩讨论一下这条链路",
+        mentions: [
+          { openId: "ou_flink", name: "Flink-SRE", key: "@_user_1" },
+          { openId: "ou_sr", name: "Starrocks-SRE", key: "@_user_2" },
+        ],
+      }) as any,
+      mode: "peer_collab",
+      participants: ["flink-sre", "starrocks-sre"],
+      maxHops: 3,
+    });
+    const followUp = makeEvent({
+      messageId: "msg_thread_followup",
+      rootId: "om_root_resume",
+      threadId: "omt_resume",
+      text: "继续，补充一个事实",
+    });
+    expect(
+      shouldSkipDispatchForMentionPolicy({
+        accountId: "main",
+        currentBotOpenId: "ou_main",
+        event: followUp as any,
+      }),
+    ).toBe(false);
+    expect(
+      shouldSkipDispatchForMentionPolicy({
+        accountId: "flink-sre",
+        currentBotOpenId: "ou_flink",
+        event: followUp as any,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipDispatchForMentionPolicy({
+        accountId: "starrocks-sre",
+        currentBotOpenId: "ou_sr",
+        event: followUp as any,
       }),
     ).toBe(true);
   });

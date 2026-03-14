@@ -21,6 +21,7 @@ import {
   tryRecordMessagePersistent,
   warmupDedupFromDisk,
 } from "./dedup.js";
+import { getActiveCollaborationStateForThread } from "./collaboration.js";
 import {
   isMentionForwardRequest,
   resolveGroupCoAddressIntent,
@@ -35,6 +36,38 @@ import type { ResolvedFeishuAccount } from "./types.js";
 
 const FEISHU_REACTION_VERIFY_TIMEOUT_MS = 1_500;
 const PRIMARY_FEISHU_ACCOUNT_ID = "main";
+
+function resolveGroupIntentForEvent(params: {
+  event: FeishuMessageEvent;
+  botOpenIdMap?: ReadonlyMap<string, string>;
+  botNameMap?: ReadonlyMap<string, string>;
+}): GroupCoAddressIntent | undefined {
+  if (params.event.message.chat_type !== "group") {
+    return undefined;
+  }
+  const { botOpenIdMap = botOpenIds, botNameMap = botNames } = params;
+  const activeThreadState = getActiveCollaborationStateForThread({
+    chatId: params.event.message.chat_id,
+    rootId: params.event.message.root_id,
+    threadId: params.event.message.thread_id,
+  });
+  return resolveGroupCoAddressIntent({
+    event: params.event,
+    mentionedBotAccountIds: extractMentionedBotAccountIds({
+      event: params.event,
+      botOpenIdMap,
+      botNameMap,
+    }),
+    knownAccountIds: [...botOpenIdMap.keys()],
+    botNameMap,
+    mainAccountId: PRIMARY_FEISHU_ACCOUNT_ID,
+    activeThreadMode:
+      activeThreadState?.mode === "peer_collab" || activeThreadState?.mode === "coordinate"
+        ? activeThreadState.mode
+        : undefined,
+    activeThreadParticipants: activeThreadState?.participants,
+  });
+}
 
 export type FeishuReactionCreatedEvent = {
   message_id: string;
@@ -261,12 +294,10 @@ export function shouldSkipDispatchForMentionPolicy(params: {
   });
   const groupIntent =
     groupIntentOverride ??
-    resolveGroupCoAddressIntent({
+    resolveGroupIntentForEvent({
       event,
-      mentionedBotAccountIds,
-      knownAccountIds: [...botOpenIdMap.keys()],
+      botOpenIdMap,
       botNameMap,
-      mainAccountId: PRIMARY_FEISHU_ACCOUNT_ID,
     });
   const effectiveMentionedBotAccountIds = groupIntent.rawParticipants;
   const mentionedOpenIds = extractMentionedOpenIds(event);
@@ -457,16 +488,8 @@ function registerEventHandlers(
       };
       const mergedGroupIntent =
         mergedEvent.message.chat_type === "group"
-          ? resolveGroupCoAddressIntent({
+          ? resolveGroupIntentForEvent({
               event: mergedEvent as FeishuMessageEvent,
-              mentionedBotAccountIds: extractMentionedBotAccountIds({
-                event: mergedEvent as FeishuMessageEvent,
-                botOpenIdMap: botOpenIds,
-                botNameMap: botNames,
-              }),
-              knownAccountIds: [...botOpenIds.keys()],
-              botNameMap: botNames,
-              mainAccountId: PRIMARY_FEISHU_ACCOUNT_ID,
             })
           : undefined;
       if (!combinedText.trim()) {
@@ -495,19 +518,7 @@ function registerEventHandlers(
         const event = data as unknown as FeishuMessageEvent;
         const botOpenId = botOpenIds.get(accountId);
         const groupIntent =
-          event.message.chat_type === "group"
-            ? resolveGroupCoAddressIntent({
-                event,
-                mentionedBotAccountIds: extractMentionedBotAccountIds({
-                  event,
-                  botOpenIdMap: botOpenIds,
-                  botNameMap: botNames,
-                }),
-                knownAccountIds: [...botOpenIds.keys()],
-                botNameMap: botNames,
-                mainAccountId: PRIMARY_FEISHU_ACCOUNT_ID,
-              })
-            : undefined;
+          event.message.chat_type === "group" ? resolveGroupIntentForEvent({ event }) : undefined;
         if (
           shouldSkipDispatchForMentionPolicy({
             accountId,

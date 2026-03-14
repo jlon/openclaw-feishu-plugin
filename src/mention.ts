@@ -238,6 +238,8 @@ export function resolveGroupCoAddressIntent(params: {
   knownAccountIds: readonly string[];
   botNameMap?: ReadonlyMap<string, string>;
   mainAccountId?: string;
+  activeThreadMode?: Extract<GroupCoAddressMode, "peer_collab" | "coordinate">;
+  activeThreadParticipants?: readonly string[];
 }): GroupCoAddressIntent {
   const {
     event,
@@ -245,13 +247,15 @@ export function resolveGroupCoAddressIntent(params: {
     knownAccountIds,
     botNameMap,
     mainAccountId = "main",
+    activeThreadMode,
+    activeThreadParticipants,
   } = params;
   const explicitParticipants = resolveExplicitGroupCoAddressParticipants({
     text: extractEventText(event),
     knownAccountIds,
     botNameMap,
   });
-  const rawParticipants = normalizeParticipants(
+  let rawParticipants = normalizeParticipants(
     explicitParticipants.length > 0 ? explicitParticipants : [...mentionedBotAccountIds],
   );
   const explicitMode = extractExplicitGroupCoAddressMode(extractEventText(event));
@@ -260,6 +264,18 @@ export function resolveGroupCoAddressIntent(params: {
     mentionedBotCount: rawParticipants.length,
     mainMentioned: rawParticipants.includes(mainAccountId) || explicitMode === "coordinate",
   });
+  if (
+    mode === "none" &&
+    !explicitMode &&
+    rawParticipants.length === 0 &&
+    activeThreadMode &&
+    activeThreadParticipants &&
+    activeThreadParticipants.length > 0 &&
+    isGroupContinuationRequest(event)
+  ) {
+    mode = activeThreadMode;
+    rawParticipants = normalizeParticipants([mainAccountId, ...activeThreadParticipants]);
+  }
   const mainMentioned = rawParticipants.includes(mainAccountId) || mode === "coordinate";
   let participants =
     mode === "peer_collab"

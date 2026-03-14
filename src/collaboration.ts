@@ -1090,6 +1090,28 @@ export function getCollaborationState(taskId: string): CollaborationState | unde
   return collaborationStateByTaskId.get(taskId);
 }
 
+export function getActiveCollaborationStateForThread(params: {
+  chatId: string;
+  rootId?: string;
+  threadId?: string;
+}): CollaborationState | undefined {
+  sweepExpiredCollaborationStates();
+  const scopedThreadId = params.rootId?.trim() || params.threadId?.trim();
+  if (!scopedThreadId) {
+    return undefined;
+  }
+  const threadKey = `${params.chatId.trim()}:thread:${scopedThreadId}`;
+  const taskId = collaborationTaskIdByThreadKey.get(threadKey);
+  if (!taskId) {
+    return undefined;
+  }
+  const state = collaborationStateByTaskId.get(taskId);
+  if (!state || isTerminalCollaborationPhase(state.phase)) {
+    return undefined;
+  }
+  return state;
+}
+
 export function getCollaborationStateForTesting(taskId: string): CollaborationState | undefined {
   return getCollaborationState(taskId);
 }
