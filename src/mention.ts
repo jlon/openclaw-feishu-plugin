@@ -491,6 +491,18 @@ export function resolveGroupCoAddressIntent(params: {
     rawParticipants = normalizeParticipants([mainAccountId, ...activeThreadParticipants]);
     scope = "active_thread";
   }
+  if (
+    rawParticipants.length > 0 &&
+    activeThreadMode &&
+    activeThreadParticipants &&
+    activeThreadParticipants.length > 0 &&
+    shouldResumeActiveThread &&
+    isGroupCollectiveScopeRequest(event) &&
+    rawParticipants.some((participant) => participant !== mainAccountId)
+  ) {
+    rawParticipants = normalizeParticipants([mainAccountId, ...activeThreadParticipants, ...rawParticipants]);
+    scope = "active_thread";
+  }
   let mode = classifyGroupCoAddressMode({
     event,
     mentionedBotCount: rawParticipants.length,

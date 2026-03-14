@@ -3084,6 +3084,390 @@ describe("handleFeishuMessage command authorization", () => {
     expect(dispatchedAccounts).not.toContain("starrocks-sre");
   });
 
+  it("adds a newly mentioned participant into an active-thread collective discussion", async () => {
+    mockCreateFeishuReplyDispatcher.mockImplementation((params) => ({
+      dispatcher: {
+        markComplete: vi.fn(),
+        waitForIdle: vi.fn(async () => {}),
+      },
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      _params: params,
+    }));
+    botOpenIds.set("main", "ou_main");
+    botOpenIds.set("coder", "ou_coder");
+    botOpenIds.set("flink-sre", "ou_flink");
+    botOpenIds.set("starrocks-sre", "ou_starrocks");
+    botNames.set("main", "首席大管家");
+    botNames.set("coder", "SoulCoder");
+    botNames.set("flink-sre", "Flink-SRE");
+    botNames.set("starrocks-sre", "Starrocks-SRE");
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "main",
+      channel: "feishu",
+      accountId: "main",
+      sessionKey: "agent:main:feishu:group:oc-group",
+      mainSessionKey: "agent:main:main",
+      matchedBy: "explicit",
+    });
+    mockCreateFeishuClient.mockImplementation((params) => ({
+      _params: params,
+      auth: { tenantAccessToken: vi.fn(async () => ({ tenant_access_token: "tenant-token" })) },
+      im: {
+        message: {
+          create: vi.fn(async () => ({ code: 0, data: { message_id: `mid_${params.appId}` } })),
+          update: vi.fn(async () => ({ code: 0 })),
+        },
+        chat: {
+          create: vi.fn(async () => ({ code: 0, data: { chat_id: "oc-chat" } })),
+          list: vi.fn(async () => ({ code: 0, data: { items: [] } })),
+          get: vi.fn(async () => ({ code: 0, data: {} })),
+          members: { get: vi.fn(async () => ({ code: 0, data: { items: [] } })) },
+        },
+        image: {
+          create: vi.fn(async () => ({ code: 0, data: { image_key: "img-key" } })),
+        },
+        media: {
+          uploadAll: vi.fn(async () => ({ code: 0, data: { file_key: "file-key" } })),
+        },
+      },
+      contact: { user: { batchGetId: vi.fn(async () => ({ code: 0, data: { user_list: [] } })) } },
+    }));
+    mockDispatchReplyFromConfig.mockResolvedValue({ queuedFinal: false, counts: { final: 1 } });
+
+    const seedEvent: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-user",
+        },
+      },
+      message: {
+        message_id: "msg-thread-add-seed",
+        chat_id: "oc-group",
+        chat_type: "group",
+        root_id: "om-thread-add-root",
+        thread_id: "om-thread-add-root",
+        message_type: "text",
+        content: JSON.stringify({
+          text: '<at user_id="ou_coder">SoulCoder</at> <at user_id="ou_flink">Flink-SRE</at> 你俩讨论一下这个问题',
+        }),
+        mentions: [
+          { key: "@_user_1", name: "SoulCoder", id: { open_id: "ou_coder" } },
+          { key: "@_user_2", name: "Flink-SRE", id: { open_id: "ou_flink" } },
+        ],
+      },
+    };
+    const seededState = resolveCollaborationStateForMessage({
+      event: seedEvent,
+      mode: "peer_collab",
+      participants: ["coder", "flink-sre"],
+      maxHops: 3,
+      coordinatorAccountId: "main",
+    });
+    applyCollaborationActions([
+      {
+        action: "collab_assess",
+        taskId: seededState.taskId,
+        agentId: "coder",
+        ownershipClaim: "owner_candidate",
+        currentFinding: "从 coder 角度给第一层判断",
+        nextCheck: "等待其他人补充",
+        needsWorker: false,
+      },
+      {
+        action: "collab_assess",
+        taskId: seededState.taskId,
+        agentId: "flink-sre",
+        ownershipClaim: "supporting",
+        currentFinding: "从 flink 角度补充一层",
+        nextCheck: "等待 owner 继续",
+        needsWorker: false,
+      },
+    ]);
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-user",
+        },
+      },
+      message: {
+        message_id: "msg-thread-add-followup",
+        chat_id: "oc-group",
+        chat_type: "group",
+        root_id: "om-thread-add-root",
+        thread_id: "om-thread-add-root",
+        message_type: "text",
+        content: JSON.stringify({
+          text: '<at user_id="ou_starrocks">Starrocks-SRE</at> 你们继续讨论下这个点',
+        }),
+        mentions: [{ key: "@_user_1", name: "Starrocks-SRE", id: { open_id: "ou_starrocks" } }],
+      },
+    };
+
+    await handleFeishuMessage({
+      cfg: {
+        channels: {
+          feishu: {
+            defaultAccount: "main",
+            accounts: {
+              main: {
+                enabled: true,
+                appId: "app_main",
+                appSecret: "secret_main",
+                requireMention: false,
+                groupPolicy: "open",
+                renderMode: "raw",
+                streaming: false,
+              },
+              coder: {
+                enabled: true,
+                appId: "app_coder",
+                appSecret: "secret_coder",
+                requireMention: true,
+                groupPolicy: "open",
+                renderMode: "raw",
+                streaming: false,
+                name: "SoulCoder",
+              },
+              "flink-sre": {
+                enabled: true,
+                appId: "app_flink",
+                appSecret: "secret_flink",
+                requireMention: true,
+                groupPolicy: "open",
+                renderMode: "raw",
+                streaming: false,
+                name: "Flink-SRE",
+              },
+              "starrocks-sre": {
+                enabled: true,
+                appId: "app_starrocks",
+                appSecret: "secret_starrocks",
+                requireMention: true,
+                groupPolicy: "open",
+                renderMode: "raw",
+                streaming: false,
+                name: "Starrocks-SRE",
+              },
+            },
+          },
+        },
+        agents: {
+          list: [
+            { id: "main", name: "首席大管家" },
+            { id: "coder", name: "SoulCoder" },
+            { id: "flink-sre", name: "Flink-SRE" },
+            { id: "starrocks-sre", name: "Starrocks-SRE" },
+          ],
+        },
+      } as ClawdbotConfig,
+      event,
+      accountId: "main",
+      botOpenId: "ou_main",
+      botName: "首席大管家",
+      runtime: createRuntimeEnv(),
+    });
+
+    const calls = mockDispatchReplyFromConfig.mock.calls.map(
+      (call) => call[0] as { ctx: Record<string, string> },
+    );
+    const dispatchedAccounts = [...new Set(calls.map((call) => call.ctx.AccountId))].sort();
+    expect(dispatchedAccounts).toEqual(["coder", "flink-sre", "starrocks-sre"]);
+    const peerInitCalls = calls.filter((call) => call.ctx.MessageSid?.includes("::peer-init::"));
+    expect(peerInitCalls.map((call) => call.ctx.AccountId).sort()).toEqual([
+      "coder",
+      "flink-sre",
+      "starrocks-sre",
+    ]);
+    expect(peerInitCalls.every((call) => call.ctx.GroupCoAddressScope === "active_thread")).toBe(true);
+    expect(peerInitCalls.every((call) => call.ctx.CollaborationMode === "peer_collab")).toBe(true);
+  });
+
+  it("upgrades an active-thread peer collaboration into coordinate and summarizes over the active participants", async () => {
+    mockCreateFeishuReplyDispatcher.mockImplementation((params) => ({
+      dispatcher: {
+        markComplete: vi.fn(),
+        waitForIdle: vi.fn(async () => {}),
+      },
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      _params: params,
+    }));
+    botOpenIds.set("main", "ou_main");
+    botOpenIds.set("coder", "ou_coder");
+    botOpenIds.set("flink-sre", "ou_flink");
+    botOpenIds.set("starrocks-sre", "ou_starrocks");
+    botNames.set("main", "首席大管家");
+    botNames.set("coder", "SoulCoder");
+    botNames.set("flink-sre", "Flink-SRE");
+    botNames.set("starrocks-sre", "Starrocks-SRE");
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "main",
+      channel: "feishu",
+      accountId: "main",
+      sessionKey: "agent:main:feishu:group:oc-group",
+      mainSessionKey: "agent:main:main",
+      matchedBy: "explicit",
+    });
+    mockDispatchReplyFromConfig.mockImplementation(async ({ ctx }: { ctx: Record<string, string> }) => {
+      if (ctx.AccountId === "coder" || ctx.AccountId === "flink-sre") {
+        applyCollaborationActions([
+          {
+            action: "collab_report_complete",
+            taskId: ctx.CollaborationTaskId,
+            agentId: ctx.AccountId,
+          },
+        ]);
+      }
+      return { queuedFinal: false, counts: { final: 1 } };
+    });
+
+    const seedEvent: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-user",
+        },
+      },
+      message: {
+        message_id: "msg-thread-upgrade-seed",
+        chat_id: "oc-group",
+        chat_type: "group",
+        root_id: "om-thread-upgrade-root",
+        thread_id: "om-thread-upgrade-root",
+        message_type: "text",
+        content: JSON.stringify({
+          text: '<at user_id="ou_coder">SoulCoder</at> <at user_id="ou_flink">Flink-SRE</at> 你俩先讨论一下这个问题',
+        }),
+        mentions: [
+          { key: "@_user_1", name: "SoulCoder", id: { open_id: "ou_coder" } },
+          { key: "@_user_2", name: "Flink-SRE", id: { open_id: "ou_flink" } },
+        ],
+      },
+    };
+    const seededState = resolveCollaborationStateForMessage({
+      event: seedEvent,
+      mode: "peer_collab",
+      participants: ["coder", "flink-sre"],
+      maxHops: 3,
+      coordinatorAccountId: "main",
+    });
+    applyCollaborationActions([
+      {
+        action: "collab_assess",
+        taskId: seededState.taskId,
+        agentId: "coder",
+        ownershipClaim: "owner_candidate",
+      },
+      {
+        action: "collab_assess",
+        taskId: seededState.taskId,
+        agentId: "flink-sre",
+        ownershipClaim: "supporting",
+      },
+    ]);
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-user",
+        },
+      },
+      message: {
+        message_id: "msg-thread-upgrade-followup",
+        chat_id: "oc-group",
+        chat_type: "group",
+        root_id: "om-thread-upgrade-root",
+        thread_id: "om-thread-upgrade-root",
+        message_type: "text",
+        content: JSON.stringify({
+          text: "最后给我一个结论",
+        }),
+      },
+    };
+
+    await handleFeishuMessage({
+      cfg: {
+        channels: {
+          feishu: {
+            defaultAccount: "main",
+            accounts: {
+              main: {
+                enabled: true,
+                appId: "app_main",
+                appSecret: "secret_main",
+                requireMention: false,
+                groupPolicy: "open",
+                renderMode: "raw",
+                streaming: false,
+              },
+              coder: {
+                enabled: true,
+                appId: "app_coder",
+                appSecret: "secret_coder",
+                requireMention: true,
+                groupPolicy: "open",
+                renderMode: "raw",
+                streaming: false,
+                name: "SoulCoder",
+              },
+              "flink-sre": {
+                enabled: true,
+                appId: "app_flink",
+                appSecret: "secret_flink",
+                requireMention: true,
+                groupPolicy: "open",
+                renderMode: "raw",
+                streaming: false,
+                name: "Flink-SRE",
+              },
+              "starrocks-sre": {
+                enabled: true,
+                appId: "app_starrocks",
+                appSecret: "secret_starrocks",
+                requireMention: true,
+                groupPolicy: "open",
+                renderMode: "raw",
+                streaming: false,
+                name: "Starrocks-SRE",
+              },
+            },
+          },
+        },
+        agents: {
+          list: [
+            { id: "main", name: "首席大管家" },
+            { id: "coder", name: "SoulCoder" },
+            { id: "flink-sre", name: "Flink-SRE" },
+            { id: "starrocks-sre", name: "Starrocks-SRE" },
+          ],
+        },
+      } as ClawdbotConfig,
+      event,
+      accountId: "main",
+      botOpenId: "ou_main",
+      botName: "首席大管家",
+      runtime: createRuntimeEnv(),
+    });
+
+    const calls = mockDispatchReplyFromConfig.mock.calls.map(
+      (call) => call[0] as { ctx: Record<string, string> },
+    );
+    const coordinateCalls = calls.filter((call) => call.ctx.CollaborationMode === "coordinate");
+    const specialistCalls = coordinateCalls.filter((call) => call.ctx.MessageSid?.includes("::coordinate::"));
+    expect(specialistCalls.map((call) => call.ctx.AccountId).sort()).toEqual(["coder", "flink-sre"]);
+    expect(specialistCalls.every((call) => call.ctx.GroupCoAddressScope === "active_thread")).toBe(true);
+    expect(coordinateCalls.at(-1)?.ctx).toEqual(
+      expect.objectContaining({
+        AccountId: "main",
+        MessageSid: expect.stringContaining("::coordinate-summary::"),
+        CollaborationMode: "coordinate",
+        GroupCoAddressScope: "active_thread",
+      }),
+    );
+    expect(coordinateCalls.map((call) => call.ctx.AccountId)).not.toContain("starrocks-sre");
+  });
+
   it("preserves display-only visible mentions for single-agent group replies with other mentioned entities", async () => {
     botOpenIds.set("starrocks-sre", "ou_starrocks_self");
     mockResolveAgentRoute.mockReturnValue({

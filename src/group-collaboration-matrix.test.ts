@@ -830,6 +830,44 @@ describe("group collaboration matrix", () => {
     );
   });
 
+  it("8d-3. active thread collective continuation can add a newly mentioned participant", () => {
+    const event = makeEvent({
+      text: "@Starrocks-SRE 你们继续讨论下这个点",
+      rootId: "om_thread_collective_add_root",
+      threadId: "om_thread_collective_add_root",
+      messageId: "msg_thread_collective_add",
+      mentions: [{ openId: "ou_sr", name: "Starrocks-SRE", key: "@_user_1" }],
+    });
+    const intent = resolveGroupIntentForEventWithActiveThread({
+      event: event as any,
+      botOpenIdMap: new Map([
+        ["main", "ou_main"],
+        ["coder", "ou_coder"],
+        ["flink-sre", "ou_flink"],
+        ["starrocks-sre", "ou_sr"],
+      ]),
+      botNameMap: new Map([
+        ["main", "首席大管家"],
+        ["coder", "SoulCoder"],
+        ["flink-sre", "Flink-SRE"],
+        ["starrocks-sre", "Starrocks-SRE"],
+      ]),
+      mainAccountId: "main",
+      activeThreadState: {
+        mode: "peer_collab",
+        participants: ["coder", "flink-sre"],
+      },
+    });
+    expect(intent).toEqual(
+      expect.objectContaining({
+        mode: "peer_collab",
+        scope: "active_thread",
+        rawParticipants: ["main", "coder", "flink-sre", "starrocks-sre"],
+        participants: ["coder", "flink-sre", "starrocks-sre"],
+      }),
+    );
+  });
+
   it("8e. plain non-follow-up text does not resume active thread collaboration", () => {
     const event = makeEvent({
       text: "收到",

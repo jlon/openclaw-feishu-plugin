@@ -8,6 +8,7 @@ import {
   clearCollaborationStateForTesting,
   completeCoordinateSummary,
   ensureCollaborationState,
+  getActiveCollaborationIntentForThread,
   getActiveCollaborationStateForThread,
   getCollaborationStateForTesting,
   getCollaborationStateStatsForTesting,
@@ -291,6 +292,56 @@ describe("collaboration state", () => {
     expect(second.mode).toBe("peer_collab");
     expect(second.phase).toBe("initial_assessment");
     expect(second.participants).toEqual(["flink-sre", "starrocks-sre", "coder"]);
+  });
+
+  it("keeps concurrent tasks in different threads of the same group isolated", () => {
+    resolveCollaborationStateForMessage({
+      event: {
+        message: {
+          chat_id: "oc_group_thread_concurrent",
+          root_id: "om_root_a",
+          thread_id: "om_thread_a",
+          message_id: "om_user_msg_a1",
+        },
+      } as any,
+      mode: "peer_collab",
+      participants: ["coder", "flink-sre"],
+      maxHops: 2,
+    });
+    resolveCollaborationStateForMessage({
+      event: {
+        message: {
+          chat_id: "oc_group_thread_concurrent",
+          root_id: "om_root_b",
+          thread_id: "om_thread_b",
+          message_id: "om_user_msg_b1",
+        },
+      } as any,
+      mode: "coordinate",
+      participants: ["main", "flink-sre", "starrocks-sre"],
+      maxHops: 3,
+    });
+
+    expect(
+      getActiveCollaborationIntentForThread({
+        chatId: "oc_group_thread_concurrent",
+        rootId: "om_root_a",
+        threadId: "om_thread_a",
+      }),
+    ).toEqual({
+      mode: "peer_collab",
+      participants: ["coder", "flink-sre"],
+    });
+    expect(
+      getActiveCollaborationIntentForThread({
+        chatId: "oc_group_thread_concurrent",
+        rootId: "om_root_b",
+        threadId: "om_thread_b",
+      }),
+    ).toEqual({
+      mode: "coordinate",
+      participants: ["main", "flink-sre", "starrocks-sre"],
+    });
   });
 
   it("elects peer owner from real collab_assess claims instead of participant order", () => {
