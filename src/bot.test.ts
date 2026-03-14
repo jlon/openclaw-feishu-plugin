@@ -227,6 +227,7 @@ describe("buildFeishuAgentBody", () => {
           protocol: "runtime",
           phase: "initial_assessment",
           participants: ["flink-sre", "starrocks-sre"],
+          coordinatorAccountId: "dispatcher",
           handoffCount: 0,
           maxHops: 2,
           isCurrentOwner: false,
@@ -240,7 +241,7 @@ describe("buildFeishuAgentBody", () => {
 
     expect(body).toContain("CollaborationRuntimeManaged=true.");
     expect(body).toContain(
-      "Runtime owns participant routing, visible @ display, turn order, and whether main should participate.",
+      "Runtime owns participant routing, visible @ display, turn order, and whether the coordinator account (dispatcher) participates.",
     );
     expect(body).toContain("This is the initial assessment stage.");
     expect(body).toContain('"action":"collab_assess"');

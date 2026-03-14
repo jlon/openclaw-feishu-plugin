@@ -2,6 +2,8 @@
 
 更新时间：2026-03-12 19:15 CST
 
+说明：文中的 `main` 只是示例协调账号 id。实际运行时的协调账号取自 `channels.feishu.defaultAccount`，不要求固定叫 `main`。
+
 ## 1. 目标
 
 这份设计只解决一件事：

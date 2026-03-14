@@ -1010,8 +1010,8 @@ export function buildFeishuAgentBody(params: {
       `Mode=${collaboration.mode}. Phase=${collaboration.phase}. Participants=${collaboration.participants.join(", ")}. ` +
       `HandoffDepth=${collaboration.handoffCount}/${collaboration.maxHops}.]`;
     messageBody +=
-      `\n[System: CollaborationRuntimeManaged=true. Runtime owns participant routing, visible @ display, turn order, and whether main should participate.]` +
-      `\n[System: Unless AllowedActions explicitly requires it or this turn is an internal inter-session request from main, do not use sessions_send, sessions_spawn, subagents, or message to pull peers, notify main, or continue the collaboration on your own.]`;
+      `\n[System: CollaborationRuntimeManaged=true. Runtime owns participant routing, visible @ display, turn order, and whether the coordinator account (${collaboration.coordinatorAccountId}) participates.]` +
+      `\n[System: Unless AllowedActions explicitly requires it or this turn is an internal inter-session request from the coordinator account (${collaboration.coordinatorAccountId}), do not use sessions_send, sessions_spawn, subagents, or message to pull peers, notify the coordinator account, or continue the collaboration on your own.]`;
     if (collaboration.allowedActions.length > 0) {
       messageBody += `\n[System: AllowedActions=${collaboration.allowedActions.join(",")}.]`;
     }
@@ -1090,7 +1090,7 @@ export function buildFeishuAgentBody(params: {
           messageBody +=
             `\n[System: Current owner is ${collaboration.currentOwner}. You are participating as a specialist in a coordinated task.]` +
             `\n[System: Visible reply should be exactly one short sentence from your own role: your first check, finding, or next step.]` +
-            `\n[System: Do not @ other participants, do not summarize for the coordinator, do not append completion chatter, and do not notify main yourself.]`;
+            `\n[System: Do not @ other participants, do not summarize for the coordinator, do not append completion chatter, and do not notify the coordinator account yourself.]`;
           if (collaboration.allowedActions.includes("collab_report_complete")) {
             messageBody +=
               `\n[System: After the visible reply, append exactly one hidden control block in this format:` +
@@ -1101,7 +1101,7 @@ export function buildFeishuAgentBody(params: {
           }
         } else {
           messageBody +=
-            `\n[System: Current owner is ${collaboration.currentOwner}. Do not act as the main speaker unless the user re-addresses you.]`;
+            `\n[System: Current owner is ${collaboration.currentOwner}. Do not act as the current speaker unless the user re-addresses you.]`;
         }
       }
     } else if (collaboration.phase === "awaiting_accept" && collaboration.activeHandoff) {

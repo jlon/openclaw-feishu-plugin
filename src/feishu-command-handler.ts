@@ -1,3 +1,5 @@
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+
 const DEFAULT_RESET_TRIGGERS = ["/new", "/reset"] as const;
 
 type FeishuBeforeResetContext = {
@@ -20,6 +22,11 @@ type FeishuBeforeResetRunner = {
     ctx: { agentId: string; sessionKey: string },
   ) => Promise<void>;
 };
+
+function resolveAgentIdFromSessionKey(sessionKey: string): string {
+  const match = sessionKey.match(/^agent:([^:]+):/u);
+  return match?.[1]?.trim() || DEFAULT_ACCOUNT_ID;
+}
 
 /**
  * Handle Feishu command messages and trigger reset hooks.
@@ -50,7 +57,7 @@ export async function handleFeishuCommand(
       },
     },
     {
-      agentId: "main",
+      agentId: resolveAgentIdFromSessionKey(sessionKey),
       sessionKey,
     },
   );

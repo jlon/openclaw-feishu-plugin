@@ -395,7 +395,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             });
             if (
               latestState?.mode === "coordinate" &&
-              agentId !== "main" &&
+              agentId !== latestState.coordinatorAccountId &&
               latestState.participants.includes(agentId) &&
               !latestState.coordinateCompletedAgents.includes(agentId)
             ) {

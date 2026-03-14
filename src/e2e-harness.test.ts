@@ -143,6 +143,19 @@ describe("e2e harness helpers", () => {
     botNames.set("flink-sre", "Flink-SRE");
     botNames.set("starrocks-sre", "Starrocks-SRE");
 
+    const cfg = {
+      channels: {
+        feishu: {
+          defaultAccount: "main",
+          accounts: {
+            main: { appId: "cli_main", appSecret: "secret_main" },
+            "flink-sre": { appId: "cli_flink", appSecret: "secret_flink" },
+            "starrocks-sre": { appId: "cli_starrocks", appSecret: "secret_starrocks" },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
     const event = buildSyntheticGroupMessageEvent({
       messageId: "msg-e2e-5",
       groupId: "oc-test-group",
@@ -163,6 +176,7 @@ describe("e2e harness helpers", () => {
     });
 
     const targets = filterSyntheticDispatchAccountIds({
+      cfg,
       event,
       candidateAccountIds: ["coder", "flink-sre", "main", "starrocks-sre"],
       botOpenIdMap: botOpenIds,
@@ -180,6 +194,18 @@ describe("e2e harness helpers", () => {
     botNames.set("main", "首席大管家");
     botNames.set("flink-sre", "Flink-SRE");
 
+    const cfg = {
+      channels: {
+        feishu: {
+          defaultAccount: "main",
+          accounts: {
+            main: { appId: "cli_main", appSecret: "secret_main" },
+            "flink-sre": { appId: "cli_flink", appSecret: "secret_flink" },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
     const event = buildSyntheticGroupMessageEvent({
       messageId: "msg-e2e-6",
       groupId: "oc-test-group",
@@ -188,6 +214,7 @@ describe("e2e harness helpers", () => {
     });
 
     const targets = filterSyntheticDispatchAccountIds({
+      cfg,
       event,
       candidateAccountIds: ["coder", "flink-sre", "main"],
       botOpenIdMap: botOpenIds,
@@ -195,6 +222,50 @@ describe("e2e harness helpers", () => {
     });
 
     expect(targets).toEqual(["main"]);
+  });
+
+  it("routes default synthetic group messages only to the configured coordinator account", () => {
+    botOpenIds.clear();
+    botNames.clear();
+    botOpenIds.set("dispatcher", "ou-dispatcher");
+    botOpenIds.set("flink-sre", "ou-flink");
+    botNames.set("dispatcher", "协调账号");
+    botNames.set("flink-sre", "Flink-SRE");
+
+    const cfg = {
+      channels: {
+        feishu: {
+          defaultAccount: "dispatcher",
+          accounts: {
+            dispatcher: {
+              appId: "cli_dispatcher",
+              appSecret: "secret_dispatcher",
+            },
+            "flink-sre": {
+              appId: "cli_flink",
+              appSecret: "secret_flink",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event = buildSyntheticGroupMessageEvent({
+      messageId: "msg-e2e-6b",
+      groupId: "oc-test-group",
+      senderOpenId: "ou-user",
+      text: "帮我看下今天的延迟情况",
+    });
+
+    const targets = filterSyntheticDispatchAccountIds({
+      cfg,
+      event,
+      candidateAccountIds: ["dispatcher", "flink-sre"],
+      botOpenIdMap: botOpenIds,
+      botNameMap: botNames,
+    });
+
+    expect(targets).toEqual(["dispatcher"]);
   });
 
   it("routes single-specialist synthetic group messages only to the mentioned specialist", () => {
@@ -206,6 +277,19 @@ describe("e2e harness helpers", () => {
     botNames.set("main", "首席大管家");
     botNames.set("flink-sre", "Flink-SRE");
     botNames.set("starrocks-sre", "Starrocks-SRE");
+
+    const cfg = {
+      channels: {
+        feishu: {
+          defaultAccount: "main",
+          accounts: {
+            main: { appId: "cli_main", appSecret: "secret_main" },
+            "flink-sre": { appId: "cli_flink", appSecret: "secret_flink" },
+            "starrocks-sre": { appId: "cli_starrocks", appSecret: "secret_starrocks" },
+          },
+        },
+      },
+    } as ClawdbotConfig;
 
     const event = buildSyntheticGroupMessageEvent({
       messageId: "msg-e2e-7",
@@ -222,6 +306,7 @@ describe("e2e harness helpers", () => {
     });
 
     const targets = filterSyntheticDispatchAccountIds({
+      cfg,
       event,
       candidateAccountIds: ["coder", "flink-sre", "main", "starrocks-sre"],
       botOpenIdMap: botOpenIds,

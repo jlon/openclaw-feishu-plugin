@@ -457,6 +457,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       mode: "coordinate",
       participants: ["main", "flink-sre", "starrocks-sre"],
       maxHops: 3,
+      coordinatorAccountId: "main",
     });
     createFeishuReplyDispatcher({
       cfg: {} as never,
@@ -509,6 +510,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       mode: "coordinate",
       participants: ["main", "flink-sre", "starrocks-sre"],
       maxHops: 3,
+      coordinatorAccountId: "main",
     });
     createFeishuReplyDispatcher({
       cfg: {} as never,
@@ -1198,5 +1200,30 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         replyInThread: true,
       }),
     );
+  });
+
+  it("does not auto-complete a non-default-named coordinator account", async () => {
+    const state = ensureCollaborationState({
+      chatId: "oc_chat",
+      messageId: "msg-coordinate-generic",
+      mode: "coordinate",
+      participants: ["dispatcher", "flink-sre"],
+      maxHops: 2,
+      coordinatorAccountId: "dispatcher",
+    });
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "dispatcher",
+      runtime: {} as never,
+      chatId: "oc_chat",
+      collaborationTaskId: state.taskId,
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls.at(-1)?.[0];
+    await options.deliver({ text: "我来协调这次排查。" }, { kind: "final" });
+
+    const latest = getCollaborationStateForTesting(state.taskId);
+    expect(latest?.coordinateCompletedAgents).toEqual([]);
   });
 });

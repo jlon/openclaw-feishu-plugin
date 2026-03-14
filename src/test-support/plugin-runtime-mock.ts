@@ -1,4 +1,5 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/feishu";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { vi } from "vitest";
 
 type DeepPartial<T> = {
@@ -134,9 +135,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           }) => `agent:${agentId}:${channel}:${peer?.kind ?? "direct"}:${peer?.id ?? "peer"}`,
         ) as unknown as PluginRuntime["channel"]["routing"]["buildAgentSessionKey"],
         resolveAgentRoute: vi.fn(() => ({
-          agentId: "main",
-          accountId: "default",
-          sessionKey: "agent:main:test:dm:peer",
+          agentId: DEFAULT_ACCOUNT_ID,
+          accountId: DEFAULT_ACCOUNT_ID,
+          sessionKey: `agent:${DEFAULT_ACCOUNT_ID}:test:dm:peer`,
         })) as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
       },
       pairing: {

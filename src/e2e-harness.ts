@@ -1,4 +1,8 @@
-import { listFeishuAccountIds, resolveFeishuAccount } from "./accounts.js";
+import {
+  listFeishuAccountIds,
+  resolveCoordinatorFeishuAccountId,
+  resolveFeishuAccount,
+} from "./accounts.js";
 import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { extractMentionedBotAccountIds, extractMentionedOpenIds, type FeishuMessageEvent } from "./bot.js";
 import { classifyGroupCoAddressMode } from "./mention.js";
@@ -30,12 +34,14 @@ export function resolveSyntheticDeliveryAccountIds(
 }
 
 export function filterSyntheticDispatchAccountIds(params: {
+  cfg?: ClawdbotConfig;
   event: FeishuMessageEvent;
   candidateAccountIds: string[];
   botOpenIdMap: ReadonlyMap<string, string>;
   botNameMap?: ReadonlyMap<string, string>;
 }): string[] {
-  const { event, candidateAccountIds, botOpenIdMap, botNameMap } = params;
+  const { cfg, event, candidateAccountIds, botOpenIdMap, botNameMap } = params;
+  const coordinatorAccountId = cfg ? resolveCoordinatorFeishuAccountId(cfg) : "main";
   const mentionedBotAccountIds = new Set(
     extractMentionedBotAccountIds({
       event,
@@ -43,18 +49,19 @@ export function filterSyntheticDispatchAccountIds(params: {
       botNameMap,
     }),
   );
-  const mainMentioned = mentionedBotAccountIds.has("main");
+  const coordinatorMentioned = mentionedBotAccountIds.has(coordinatorAccountId);
   const hasAnyInternalBotMention = mentionedBotAccountIds.size > 0 || extractMentionedOpenIds(event).length > 0;
   const coAddressMode = classifyGroupCoAddressMode({
     event,
     mentionedBotCount: mentionedBotAccountIds.size,
-    mainMentioned,
+    mainMentioned: coordinatorMentioned,
   });
   if (coAddressMode !== "none") {
     return candidateAccountIds.filter(
       (accountId) =>
         !shouldSkipDispatchForMentionPolicy({
           accountId,
+          cfg,
           event,
           botOpenIdMap,
           botNameMap,
@@ -65,6 +72,7 @@ export function filterSyntheticDispatchAccountIds(params: {
     if (
       shouldSkipDispatchForMentionPolicy({
         accountId,
+        cfg,
         event,
         botOpenIdMap,
         botNameMap,
@@ -73,12 +81,12 @@ export function filterSyntheticDispatchAccountIds(params: {
       return false;
     }
     if (!hasAnyInternalBotMention) {
-      return accountId === "main";
+      return accountId === coordinatorAccountId;
     }
     if (mentionedBotAccountIds.has(accountId)) {
       return true;
     }
-    return accountId === "main" && mainMentioned;
+    return accountId === coordinatorAccountId && coordinatorMentioned;
   });
 }
 

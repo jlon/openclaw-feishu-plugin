@@ -4,6 +4,8 @@
 
 这个仓库解决的重点不是飞书基础接入，而是 `多账号 + 群聊协作 + 多 Agent 协议` 这条生产主线。当前本地运行中的飞书插件代码，已经以这个仓库为准并同步到本机 OpenClaw 安装目录。
 
+说明：文中的 `main` 只是示例协调账号 id。实际运行时的协调账号取自 `channels.feishu.defaultAccount`，不要求固定叫 `main`。
+
 ## 这是什么
 
 这个插件在保留官方飞书插件基础能力的前提下，重点补了 **群聊里的多 Agent 协作协议**。
@@ -17,7 +19,7 @@
 它不解决的核心问题是：
 - 同时点名多个内部 Agent 时怎么分流
 - 复杂问题时多个 Agent 怎么协作，而不是抢答
-- `main` 怎么在群里编排，专业 Agent 怎么接棒
+- 协调账号怎么在群里编排，专业 Agent 怎么接棒
 - 多轮协作时怎么避免串身份、乱 `@`、重复回复、内部控制块泄漏
 
 这个增强版插件补的就是这一层。
@@ -26,7 +28,7 @@
 - 多账号飞书接入
 - 文档、知识库、云盘、权限等工具能力
 - 群消息仲裁与多 Agent 群协作协议
-- `main` 默认入口、专业 Agent 显式点名、共同点名直答
+- 默认飞书账号作为协调入口、专业 Agent 显式点名、共同点名直答
 - `peer_collab / coordinate` 两类复杂协作模式
 - `peer_collab` 下的持续下钻与受控多轮接棒
 - owner、handoff、accept/reject/need_info/complete 协作状态机
@@ -38,7 +40,7 @@
 
 这版插件的主交互面不是 `#直答(A,B)` 这种 DSL，而是自然群聊。
 
-用户正常在群里点多个内部 bot，插件会先让 `main` 在后台做一次入口分类：
+用户正常在群里点多个内部 bot，插件会先让协调账号在后台做一次入口分类：
 - 这是轻量直答
 - 这是持续协作
 - 这是需要编排和汇总
@@ -61,7 +63,7 @@
 ```
 
 ```text
-@首席大管家 @Flink-SRE @Starrocks-SRE 帮我安排并汇总这次排查
+@协调账号 @Agent-A @Agent-B 帮我安排并汇总这次排查
 ```
 
 显式模式仍然保留，但只作为 override/debug 能力：
@@ -82,7 +84,7 @@ flowchart TD
 
     R --> D["direct_reply<br/>共同点名直答"]
     R --> P["peer_collab<br/>专业 Agent 受控多轮协作"]
-    R --> C["coordinate<br/>main 编排与汇总"]
+    R --> C["coordinate<br/>协调账号编排与汇总"]
 
     D --> A1["被点名 Agent 各自回复"]
 
@@ -90,7 +92,7 @@ flowchart TD
     H --> A2["当前 owner"]
     H --> A3["目标 Agent 接棒"]
 
-    C --> M["main 接原始群消息"]
+    C --> M["协调账号接原始群消息"]
     M --> H
 
     A1 --> V["群里可见回复"]
@@ -110,7 +112,7 @@ flowchart TD
 这张图对应的核心判断只有一句：**官方 stock 插件解决“飞书接入”，当前增强版插件解决“群里多个 Agent 如何稳定协作”。**
 
 更具体地说：
-- `main` 默认是隐藏入口分类器，不是默认可见主讲人
+- 协调账号默认是隐藏入口分类器，不是默认可见主讲人
 - specialist 是群里主要可见发言者
 - runtime 才是真正的协作控制面
 
@@ -143,7 +145,7 @@ flowchart TD
 - 群里保留可见协作感
 - 内部用 `owner + handoff + accept/reject/need_info/complete` 做真实接棒
 
-### 痛点 4：复杂任务时，main 和专业 Agent 经常抢答
+### 痛点 4：复杂任务时，协调账号和专业 Agent 经常抢答
 
 增强后把群消息分成 4 种模式：
 - `default`
@@ -154,7 +156,7 @@ flowchart TD
 这使得：
 - 简单问题可以直接答
 - 复杂问题可以协作
-- 明确要求汇总时只由 `main` 收口
+- 明确要求汇总时只由协调账号收口
 
 ## 和官方 stock 插件的差异
 
@@ -166,7 +168,7 @@ flowchart TD
 | 群 allowlist / `requireMention` | 支持 | 支持 |
 | 多 Agent 共同点名分流 | 不完整 | 支持 |
 | 共同点名直答 | 无明确协议 | 支持 |
-| `main` 编排模式 | 无明确协议 | 支持 |
+| 协调账号编排模式 | 无明确协议 | 支持 |
 | 多专业 Agent 受控多轮协作 | 不支持 | 支持 |
 | owner / handoff | 不支持 | 支持 |
 | 群参与者视图 | 不支持 | 支持 `participants` |
@@ -186,11 +188,11 @@ flowchart LR
     S2C --> S2D["owner 接棒"]
     S2D --> S2E["受控多轮协作"]
 
-    S3["场景 3<br/>main 编排并收口"] --> S3A["点名 main + 专业 Agent"]
+    S3["场景 3<br/>协调账号编排并收口"] --> S3A["点名协调账号 + 专业 Agent"]
     S3A --> S3B["进入 coordinate"]
-    S3B --> S3C["main 接原始消息"]
+    S3B --> S3C["协调账号接原始消息"]
     S3C --> S3D["内部派单协作"]
-    S3D --> S3E["main 汇总回复"]
+    S3D --> S3E["协调账号汇总回复"]
 ```
 
 ### 场景 1：共同点名，轻量直答
@@ -215,22 +217,22 @@ flowchart LR
 - 默认最多接棒 `3` 次
 - 不是各说一句就结束
 
-### 场景 3：main 编排并收口
+### 场景 3：协调账号编排并收口
 
 ```text
-@首席大管家 @Flink-SRE @Starrocks-SRE 帮我安排并汇总这次排查
+@协调账号 @Agent-A @Agent-B 帮我安排并汇总这次排查
 ```
 
 预期：
 - 进入 `coordinate`
-- 只有 `main` 处理原始消息
+- 只有协调账号处理原始消息
 - 专业 Agent 通过内部协作参与
-- 最终由 `main` 汇总
+- 最终由协调账号汇总
 
 ### 场景 4：群机器人参与者盘点
 
 ```text
-@首席大管家 这个群里有多少机器人？
+@协调账号 这个群里有多少机器人？
 ```
 
 预期：
@@ -293,7 +295,7 @@ flowchart LR
         "maxHops": 3
       },
       "accounts": {
-        "main": {
+        "coordinator": {
           "collaboration": {
             "maxHops": 2
           }
@@ -318,7 +320,7 @@ flowchart LR
 
 ### 1. `default`
 - 无 `@`
-- 只有 `main` 作为默认入口处理
+- 只有协调账号作为默认入口处理
 
 ### 2. `direct_reply`
 - 共同点名多个 Agent，但问题只是轻量直答
@@ -328,7 +330,7 @@ flowchart LR
 - override：`#直答`
 
 ### 3. `peer_collab`
-- 多个内部专业 Agent 被共同点名，且不属于轻量直答或 `main` 汇总
+- 多个内部专业 Agent 被共同点名，且不属于轻量直答或协调账号汇总
 - 会创建协作任务
 - 允许 owner、handoff、accept/reject/need_info/complete
 - 用于“多个专业 Agent 受控多轮协作”
@@ -336,14 +338,14 @@ flowchart LR
 - override：`#协作`
 
 ### 4. `coordinate`
-- 明确要求 `main` 安排、协调、汇总、拉通
-- 只有 `main` 处理原始群消息
+- 明确要求协调账号安排、协调、汇总、拉通
+- 只有协调账号处理原始群消息
 - 其他 Agent 通过内部协作参与
-- 主路径触发方式：`@首席大管家 @A @B 帮我安排并汇总`
+- 主路径触发方式：`@协调账号 @A @B 帮我安排并汇总`
 - override：`#编排`
 
 ### 5. 自然语言兼容层
-- `@main + 安排/协调/汇总` 倾向 `coordinate`
+- `@协调账号 + 安排/协调/汇总` 倾向 `coordinate`
 - 明显轻量直答句式倾向 `direct_reply`
 - 其余多内部 bot 共同点名默认进入 `peer_collab`
 
@@ -374,7 +376,7 @@ flowchart LR
 
 ### 2. 准备飞书应用
 
-至少需要准备 1 个飞书应用；如果要做多 Agent 群协作，则建议为 `main`、专业 Agent 分别准备独立飞书应用。
+至少需要准备 1 个飞书应用；如果要做多 Agent 群协作，则建议为协调账号和专业 Agent 分别准备独立飞书应用。
 
 ### 3. 配置 `channels.feishu`
 
@@ -385,11 +387,11 @@ flowchart LR
   "channels": {
     "feishu": {
       "enabled": true,
-      "defaultAccount": "main",
+      "defaultAccount": "coordinator",
       "groupPolicy": "allowlist",
       "groupAllowFrom": ["oc_xxx"],
       "accounts": {
-        "main": {
+        "coordinator": {
           "appId": "cli_xxx",
           "appSecret": "xxx",
           "requireMention": false
@@ -443,24 +445,26 @@ openclaw gateway health
 ```
 
 ```text
-@首席大管家 @Flink-SRE @Starrocks-SRE 帮我安排并汇总这次排查
+@协调账号 @Agent-A @Agent-B 帮我安排并汇总这次排查
 ```
 
 如果这 3 类场景都符合预期，说明插件的群协作主线已经接通。
 
 ## 当前运行时
 
-本机 OpenClaw 当前加载的插件目录是：
-
-```text
-/home/oppo/.nvm/versions/node/v22.22.0/lib/node_modules/openclaw/extensions/feishu
-```
-
 这个仓库不会自动替换运行目录。修改仓库后，需要手动执行：
 
 ```bash
 npm run sync:local
 systemctl --user restart openclaw-gateway.service
+```
+
+`npm run sync:local` 会同步到你当前 OpenClaw 实际加载的 Feishu 插件安装目录。这个目录依赖你的 Node/OpenClaw 安装方式，不应在通用文档里写死成本地绝对路径。
+
+如果自动探测失败，可以显式指定：
+
+```bash
+OPENCLAW_FEISHU_PLUGIN_DIR=/path/to/openclaw/extensions/feishu npm run sync:local
 ```
 
 ## 已知边界

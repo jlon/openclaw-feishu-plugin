@@ -153,7 +153,7 @@ const buildRuntimeEnv = (): RuntimeEnv =>
     },
   }) as RuntimeEnv;
 
-const main = async () => {
+const run = async () => {
   const args = parseArgs(process.argv.slice(2));
   const cfg = prepareSyntheticHarnessConfig(await loadConfig(args.configPath));
   const createPluginRuntime = await loadCreatePluginRuntime();
@@ -249,6 +249,7 @@ const main = async () => {
     threadId: args.threadId,
   });
   const filteredDeliverAccounts = filterSyntheticDispatchAccountIds({
+    cfg,
     event,
     candidateAccountIds: deliverAccounts,
     botOpenIdMap: botOpenIds,
@@ -299,7 +300,7 @@ const main = async () => {
   console.log(`[e2e] completed ${messageId}`);
 };
 
-main()
+run()
   .then(() => {
     process.exit(0);
   })
